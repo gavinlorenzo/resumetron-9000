@@ -1,0 +1,18 @@
+# What `resumetron interview` produces. Edit freely.
+summary: Recent public policy graduate with municipal internship experience, seeking entry-level policy analyst or program coordinator roles in government or civic nonprofits.
+targetRoles: [Policy Analyst, Program Coordinator, Legislative Aide]
+titleInclude: []
+titleExclude: [Senior, Director, Principal, Engineer]
+keywords: [policy, research, government, community, program, analysis, briefing, stakeholder]
+locations: [Springfield, Chicago, IL]
+remoteOk: true
+remoteOnly: false
+minSalary: 45000
+dealbreakers: [unpaid]
+companies:
+  - { ats: greenhouse, token: examplecivic, name: Example Civic Labs }
+  - { ats: lever, token: example-nonprofit, name: Example Nonprofit }
+searches:
+  - { query: policy analyst, location: Illinois }
+blockedCompanies: []
+notes: ""

@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+
+# Personal data never belongs in this repo. The workspace defaults to ~/.resumetron;
+# these patterns catch one created here by accident.
+.resumetron/
+pool.yaml
+goal.yaml
+answers.yaml
+applications/
+ledger.db*
+*.pdf

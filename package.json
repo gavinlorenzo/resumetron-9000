@@ -1,0 +1,29 @@
+{
+  "name": "resumetron-9000",
+  "version": "0.1.0",
+  "description": "If employers are screening with AI, I'm submitting with AI. A provider-agnostic job application agent.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "resumetron": "dist/cli.js" },
+  "files": ["dist", "examples", "README.md", "LICENSE"],
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "dev": "node --disable-warning=ExperimentalWarning src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/*.test.ts\"",
+    "browsers": "playwright install chromium"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^1.7.0",
+    "commander": "^15.1.0",
+    "playwright": "^1.65.0",
+    "unpdf": "^2.1.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^7.0.2"
+  }
+}

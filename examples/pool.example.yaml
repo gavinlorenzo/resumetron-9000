@@ -1,0 +1,98 @@
+# A fictional CV pool showing the format. `resumetron import` writes one of these
+# from your own documents; you can also write it by hand.
+
+contact:
+  name: Jordan Rivera
+  phone: (555) 010-0199
+  email: jordan.rivera@example.com
+  links:
+    - https://www.linkedin.com/in/example-jordan
+  address: 100 Example Street, Springfield, IL 62701
+  city: Springfield
+  state: IL
+  zip: "62701"
+  country: United States
+
+sections:
+  - key: education
+    heading: Education
+    type: education
+    entries:
+      - id: state-ba
+        degree: Bachelor of Arts
+        date: May 2025
+        school: Springfield State University
+        location: Springfield, IL
+        left: ["Major: Public Policy", "GPA: 3.6/4.0"]
+        right: ["Dean's List x3"]
+
+  - key: leadership
+    heading: Leadership
+    type: experience
+    layout: org-first
+    entries:
+      - id: debate
+        org: Springfield State Debate Society
+        location: Springfield, IL
+        roles:
+          - id: debate-pres
+            title: President
+            dates: August 2023 - May 2025
+            bullets:
+              - id: debate-pres-1
+                text: Led a team of 40 members to 12 tournament wins while managing a $15,000 travel budget
+                tags: [leadership, budget, public speaking]
+              - id: debate-pres-2
+                text: Built a peer coaching program that doubled first-year retention
+                tags: [training, mentoring, program design]
+
+  - key: work
+    heading: Work Experience
+    type: experience
+    layout: role-first
+    entries:
+      - id: city
+        org: City of Springfield, Office of the Mayor
+        location: Springfield, IL
+        roles:
+          - id: city-intern
+            title: Policy Intern
+            dates: June 2024 - August 2024
+            meta: 30hr/wk
+            bullets:
+              - id: city-intern-1
+                text: Researched zoning policy in 8 peer cities and drafted a briefing memo used by council staff
+                tags: [research, policy, writing]
+              - id: city-intern-2
+                text: Organized 3 public listening sessions attended by over 200 residents
+                tags: [community engagement, events]
+      - id: cafe
+        org: Corner Cafe
+        location: Springfield, IL
+        roles:
+          - id: cafe-barista
+            title: Barista
+            dates: 2021 - 2023
+            bullets:
+              - id: cafe-barista-1
+                text: Trained new staff and handled opening shifts and cash reconciliation
+                tags: [customer service, training]
+
+  - key: skills
+    heading: Skills
+    type: inline
+    entries:
+      - id: skills-tools
+        label: Tools
+        items:
+          - { id: sk-excel, text: Excel }
+          - { id: sk-stata, text: Stata }
+          - { id: sk-gis, text: ArcGIS }
+      - id: skills-lang
+        label: Languages
+        items:
+          - { id: sk-spanish, text: Spanish, note: conversational }
+
+facts:
+  - Grew up in Springfield and wants to work in local or state government.
+  - Available to start June 2025.
