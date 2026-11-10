@@ -43,7 +43,41 @@ export const Config = z.object({
       maxAgeDays: z.number().default(30),
       minKeywordScore: z.number().default(0.15),
       minFit: z.number().default(70),
+      /** Bar when goal.breadth is "broad": roles you're roughly half-qualified for. */
+      minFitBroad: z.number().default(50),
       maxScreenPerRun: z.number().default(20),
+    })
+    .prefault({}),
+  campaign: z
+    .object({
+      /** HTTP requests to job sources per run, across boards, searches, and board lookups. */
+      maxRequestsPerRun: z.number().default(40),
+      /** Pages per search per run: page 1 for new postings, then deeper from where the last run stopped. */
+      maxPagesPerQuery: z.number().default(3),
+      boardSweepHours: z.number().default(20),
+      /** A search is retired after this many runs in a row that surface nothing new. */
+      exhaustAfterEmptyRuns: z.number().default(3),
+      /** Planner (one model call) every N runs; 0 turns it off. */
+      plannerEveryRuns: z.number().default(1),
+      plannerInEfficiencyMode: z.boolean().default(false),
+      maxNewQueriesPerRun: z.number().default(6),
+      discoverBoards: z.boolean().default(true),
+      maxProbesPerRun: z.number().default(6),
+    })
+    .prefault({}),
+  retention: z
+    .object({
+      /** Rejected and skipped jobs are kept as small dedupe records for this long, then deleted. */
+      tombstoneDays: z.number().default(180),
+      /** Most jobs waiting to be screened; the lowest-scored beyond this are dropped. */
+      backlogMax: z.number().default(400),
+      journalMax: z.number().default(300),
+      inactiveQueriesMax: z.number().default(300),
+      probeDays: z.number().default(90),
+      screenshotsDays: z.number().default(14),
+      /** Packets of skipped, failed, and preview applications. Sent applications keep their PDFs. */
+      packetDays: z.number().default(30),
+      logDays: z.number().default(14),
     })
     .prefault({}),
   resume: z
@@ -67,6 +101,9 @@ export const Config = z.object({
     .prefault({}),
   sources: z
     .object({
+      // Free, keyless keyword search. Remote roles only, so used when goal.remoteOk is true.
+      himalayas: z.boolean().default(true),
+      remotive: z.boolean().default(true),
       usajobs: z.object({ apiKeyEnv: z.string(), contactEmailEnv: z.string() }).optional(),
       adzuna: z
         .object({ appIdEnv: z.string(), appKeyEnv: z.string(), country: z.string().default("us") })

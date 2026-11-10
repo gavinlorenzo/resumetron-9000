@@ -27,7 +27,8 @@ export function describeSchedule(spec: ScheduleSpec): string {
   }
   const [h, m] = (spec.at ?? "09:00").split(":");
   const cron = spec.everyHours ? `0 */${spec.everyHours} * * *` : `${Number(m)} ${Number(h)} * * *`;
-  return `${cron} ${cmd} >> "$HOME/.resumetron/cron.log" 2>&1 ${MARK}`;
+  // `run` keeps its own rotating daily logs, so cron output is discarded instead of piling up.
+  return `${cron} ${cmd} > /dev/null 2>&1 ${MARK}`;
 }
 
 export function installSchedule(spec: ScheduleSpec): string {

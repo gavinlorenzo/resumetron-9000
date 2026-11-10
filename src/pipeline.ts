@@ -9,8 +9,9 @@ import type { Ledger, JobRow } from "./ledger.ts";
 import { BudgetExceededError, type Llm } from "./llm/index.ts";
 import { goalKeywords, goalTargets, hardFilter, pickStandard, relevance, screenJob } from "./match.ts";
 import { compose, docToText } from "./resume/compose.ts";
+import { type CampaignCtx, applyPlan, discoverBoards, gather, matchesExclusion, planCampaign, sweepNewBoards, syncGoal } from "./campaign.ts";
 import { type AnswerBank, type Goal, type Job, type Pool, type Standard, TailorPlan } from "./schema.ts";
-import { type SourceFetcher, fetchAllJobs } from "./sources.ts";
+import { type SourceSet, liveSources } from "./sources.ts";
 import { tailorPlan, templateCoverLetter, writeCoverLetter } from "./tailor.ts";
 import { errorMessage, safeFileName, sleep } from "./util.ts";
 import type { Workspace } from "./workspace.ts";
@@ -26,7 +27,7 @@ export interface Ctx {
   llm: Llm;
   browser: BrowserHost;
   log: (s: string) => void;
-  fetchJobs?: SourceFetcher;
+  sources?: SourceSet;
 }
 
 export interface RunOptions {
@@ -42,37 +43,67 @@ export interface Packet {
   coverText?: string;
 }
 
-/** One scheduled pass: discover, filter, screen, prepare, and (in auto mode) submit. */
+/** One scheduled pass: plan, search, filter, screen, prepare, (in auto mode) submit, and prune. */
 export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<string, number>> {
   const { cfg, goal, ledger, log } = ctx;
   const mode = opts.mode ?? cfg.mode;
   const tally: Record<string, number> = {};
   const bump = (k: string) => (tally[k] = (tally[k] ?? 0) + 1);
+  const camp: CampaignCtx = { cfg, goal, pool: ctx.pool, ledger, llm: ctx.llm, sources: ctx.sources ?? liveSources(cfg), log };
+  const runNo = Number(ledger.meta("runs") ?? 0) + 1;
+  ledger.setMeta("runs", String(runNo));
 
-  log(`Searching ${goal.companies.length} company boards and ${goal.searches.length} searches...`);
-  const found = await (ctx.fetchJobs ?? fetchAllJobs)(goal, cfg, log);
-  tally.new = ledger.addJobs(found);
-  log(`  ${found.length} postings, ${tally.new} new.`);
+  // 0. Plan: widen or narrow the search from what earlier runs found.
+  syncGoal(camp);
+  const every = cfg.campaign.plannerEveryRuns;
+  const planHere = every > 0 && runNo % every === 0 && (mode === "tailored" || cfg.campaign.plannerInEfficiencyMode);
+  if (planHere) {
+    try {
+      const plan = await planCampaign(camp);
+      const changes = applyPlan(camp, plan);
+      ledger.note("plan", [plan.note, ...changes].filter(Boolean).join(" | "));
+      if (changes.length) log(`Planner: ${changes.join("; ")}`);
+    } catch (e) {
+      log(`  planner skipped: ${errorMessage(e)}`);
+    }
+  }
 
-  // 1. Free filters on everything not yet judged.
+  // 1. Search.
+  const boards = ledger.boards("active").length;
+  const queries = ledger.queries("active").length;
+  log(`Searching ${boards} company board(s) and ${queries} active search(es)...`);
+  const got = await gather(camp);
+  tally.new = got.fresh;
+  log(`  ${got.requests} request(s), ${got.seen} postings, ${got.fresh} new.`);
+
+  // 2. Free filters on everything not yet judged. Broad campaigns rank instead of rejecting on keywords.
+  const broad = goal.breadth === "broad";
+  const exclusions = ledger.exclusions();
+  const targets = broad ? [...goalTargets(goal), ...ledger.queries("active").map((q) => q.query)] : goalTargets(goal);
+  const keywords = broad ? [...new Set([...goalKeywords(goal), ...poolTags(ctx.pool)])] : goalKeywords(goal);
+  const hits = new Map<number, number>();
   for (const row of ledger.byStatus("discovered")) {
     const job = ledger.job(row);
-    const why = hardFilter(job, goal, cfg);
-    const score = relevance(job, goalTargets(goal), goalKeywords(goal));
+    const ex = exclusions.find((e) => matchesExclusion(e, job));
+    if (ex) hits.set(ex.id, (hits.get(ex.id) ?? 0) + 1);
+    const why = ex ? `excluded (${ex.kind}: ${ex.pattern})` : hardFilter(job, goal, cfg, ctx.pool.contact.country);
+    const score = relevance(job, targets, keywords);
     if (why) ledger.setStatus(row.id, "rejected", { reason: why });
-    else if (score < cfg.matching.minKeywordScore) ledger.setStatus(row.id, "rejected", { reason: `low keyword match (${score.toFixed(2)})` });
+    else if (!broad && score < cfg.matching.minKeywordScore) ledger.setStatus(row.id, "rejected", { reason: `low keyword match (${score.toFixed(2)})` });
     else {
       ledger.setStatus(row.id, "matched", { fit: Math.round(score * 100), reason: "keyword match" });
       continue;
     }
     bump("rejected");
   }
+  for (const [id, n] of hits) ledger.hitExclusion(id, n);
 
   let room = Math.min(cfg.quota.maxPerRun, cfg.quota.maxPerDay - ledger.usedToday());
   if (room <= 0) {
     log("Daily quota reached; nothing more to prepare today.");
     return tally;
   }
+  const matchedCompanies: string[] = [];
 
   // 2. Rank what's left. Tailored mode asks the model; efficiency mode matches standards.
   type Pick = { row: JobRow; job: Job; standard?: Standard };
@@ -87,22 +118,30 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     }
   } else {
     const candidate = docToText(ctx.pool);
+    const minFit = broad ? cfg.matching.minFitBroad : cfg.matching.minFit;
     let screened = 0;
     for (const row of pending) {
       if (row.reason?.startsWith("screened")) {
-        if ((row.fit ?? 0) >= cfg.matching.minFit) picks.push({ row, job: ledger.job(row) });
+        if ((row.fit ?? 0) >= minFit) picks.push({ row, job: ledger.job(row) });
         continue;
       }
       if (screened >= cfg.matching.maxScreenPerRun) continue;
       const job = ledger.job(row);
+      if (job.postedAt && Date.now() - Date.parse(job.postedAt) > cfg.matching.maxAgeDays * 86_400_000) {
+        ledger.setStatus(row.id, "rejected", { reason: "expired while waiting" });
+        continue;
+      }
       try {
         const s = await screenJob(ctx.llm, job, goal, candidate);
         screened++;
-        if (s.dealbreaker || s.fit < cfg.matching.minFit) {
+        if (s.dealbreaker || s.fit < minFit) {
           ledger.setStatus(row.id, "rejected", { fit: s.fit, reason: `screened: ${s.reason}` });
+          ledger.credit(row.origin, false);
           bump("rejected");
         } else {
           ledger.setStatus(row.id, "matched", { fit: s.fit, reason: `screened: ${s.reason}` });
+          ledger.credit(row.origin, true);
+          if (!job.autoApplicable) matchedCompanies.push(job.company);
           picks.push({ row: { ...row, fit: s.fit }, job });
         }
       } catch (e) {
@@ -111,6 +150,20 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
       }
     }
     picks.sort((a, b) => (b.row.fit ?? 0) - (a.row.fit ?? 0));
+  }
+
+  // A good match from an aggregator means the employer may have a board worth reading in full,
+  // and that board's form can usually be filled automatically.
+  const found = await discoverBoards(camp, matchedCompanies);
+  if (found.length) {
+    log(`Found job boards: ${found.join(", ")}`);
+    const more = await sweepNewBoards(camp);
+    log(`  read them: ${more} more new postings, screened on the next run`);
+    // Matches seen on an aggregator may now point at the employer's own form.
+    for (const p of picks) {
+      const row = ledger.get(p.job.id);
+      if (row) p.job = ledger.job(row);
+    }
   }
 
   // 3. Prepare and apply, best first, within quota.
@@ -137,7 +190,16 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
       bump("needs_human");
     }
   }
+  ledger.note("run", `run ${runNo}: ${Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(", ") || "nothing new"}`);
   return tally;
+}
+
+/** Bullet tags from the pool: the vocabulary a broad search scores postings against. */
+function poolTags(pool: Pool): string[] {
+  const tags = new Set<string>();
+  for (const s of pool.sections)
+    if (s.type === "experience") for (const e of s.entries) for (const r of e.roles) for (const b of r.bullets) b.tags.forEach((t) => tags.add(t));
+  return [...tags].slice(0, 40);
 }
 
 /** Builds the resume, cover letter, and notes for one job in its own folder. */

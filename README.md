@@ -59,7 +59,8 @@ Everything personal lives in `~/.resumetron` (or `--home`, or `$RESUMETRON_HOME`
 | `cover-template.md` | The no-AI cover letter for efficiency mode. `{{company}}`, `{{title}}`, `{{name}}`. |
 | `standards/` | Reusable resumes for efficiency mode. |
 | `applications/<company>-<id>/` | One packet per application: resume and cover letter PDFs, the posting, the tailoring plan and guard log, every form answer with its source, and screenshots. |
-| `ledger.db` | Every job seen and what happened to it, plus token usage. Nothing is applied to twice. |
+| `ledger.db` | The campaign's memory: every job seen and what happened to it, every search and board with its yield, exclusions, the journal, and daily token usage. Nothing is applied to twice. |
+| `logs/` | One log file per day of runs. |
 
 ## The resume format
 
@@ -109,18 +110,45 @@ resumetron schedule install --print         # show the entry without installing
 resumetron schedule remove
 ```
 
-## Where jobs come from
+## Where jobs come from: the search campaign
 
-Official public APIs only:
+Searching is a campaign with memory, not a fixed list. Every company board and keyword search is tracked with a page cursor and yield statistics, so each run digs deeper instead of re-reading the same results:
 
-- **Greenhouse, Lever, Ashby** company boards: list them in `goal.companies` (the interview suggests and verifies tokens; `resumetron boards` re-checks them). These forms can be filled automatically.
-- **USAJOBS** (free API key) and **Adzuna** (free app ID and key) keyword searches: list them in `goal.searches` and enable them under `sources` in the config. These end on sites that need your own login, so they're prepared as packets for you to finish.
+- **Fresh, then deeper.** Each search re-checks page 1 for new postings, then continues from the page where the last run stopped. A posting is never shown twice, even when several boards and searches list it. When a search has been read to its end and keeps turning up nothing new, it retires.
+- **A planner steers.** Once per run (one model call), it reads what every search has produced and why screened jobs were turned down. Then it adds searches (adjacent roles, other sectors' vocabulary for the same work), retires ones that keep failing, and names employers worth a look. Retiring a search takes evidence: at least 3 of its jobs screened with none passing, or no new results for two runs. Its reasoning is kept in the journal (`resumetron journal`).
+- **Boards get discovered.** When a match turns up on an aggregator, or the planner names an employer, the tool checks for a Greenhouse, Lever, or Ashby board. If one exists, it reads the whole board, right away when that can upgrade a match to the employer's own fillable form.
+- **Exclusions.** Excluded titles, companies, keywords, or single jobs never come up again: `resumetron exclude title "nurse"`, `resumetron exclude company "Acme"`, `resumetron exclude job <id>`. The planner can add title and company exclusions too, but only for a pattern that at least 3 screened jobs were rejected under and that would block nothing worth applying to. It can never exclude your target roles.
+- **Broad mode.** Set `breadth: broad` in `goal.yaml` (or say so in the interview) for "here's my CV, find me anything I'm half-qualified for". The planner fans out into adjacent roles, postings are ranked rather than dropped for missing keywords, and screening accepts credible stretch roles (`matching.minFitBroad`, default 50).
 
-LinkedIn, Indeed, and similar sites aren't supported. Their terms forbid automated applying, and accounts that do it get banned.
+`resumetron searches` shows every search: depth read, new jobs found, jobs screened, and how many passed. `resumetron search "<query>"` adds one, `--retire <id>` drops one, and `resumetron boards --add greenhouse:<token>` adds a board. Per-run limits live under `campaign:` in the config.
+
+Sources are official public APIs only:
+
+| Source | Key needed | Coverage | Applying |
+|---|---|---|---|
+| Greenhouse, Lever, Ashby boards | none | one employer's every opening | filled automatically |
+| Himalayas, Remotive | none | remote roles, keyword search | packet prepared; often upgraded via board discovery |
+| USAJOBS | free API key | US federal jobs | packet prepared; you finish on USAJOBS |
+| Adzuna | free app ID and key | broad keyword search across most job sites | packet prepared; often upgraded via board discovery |
+
+For on-site and hybrid roles, add Adzuna or USAJOBS (`sources:` in the config). Without them, keyword search covers remote roles only, and on-site roles come from company boards. LinkedIn, Indeed, and similar sites aren't supported: their terms forbid automated applying, and accounts that do it get banned.
+
+## Storage stays bounded
+
+Everything the tool keeps has a limit, so a cron job can run for months on a small VPS without filling the disk or slowing down. Defaults, all adjustable under `retention:`:
+
+- Finished jobs shrink to a small dedupe record (the posting text is dropped). Rejected and skipped records are deleted after 180 days. Records of applications you sent are kept.
+- The waiting backlog holds at most 400 jobs; the lowest-scored drop off first.
+- The journal keeps 300 entries. Covered searches, board lookups, and token usage (one row per day) are capped or expire.
+- Screenshots go after 14 days. Packets for skipped, failed, and preview applications go after 30 days. PDFs of sent applications stay.
+- Each run logs to one file per day, kept for 14 days. The database hands freed space back after every cleanup.
+- Only one run at a time: a lock stops an overlapping cron run from starting a second browser.
+
+Cleanup runs after every `run`. `resumetron prune` runs it by hand, and `resumetron status` shows disk use.
 
 ## Commands
 
-`init` `import` `interview` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `status` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
+`init` `import` `interview` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `searches` `search` `exclude` `journal` `status` `prune` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
 
 ## Use it responsibly
 

@@ -96,6 +96,11 @@ export const CompanyBoard = z.object({
 
 export const Goal = z.object({
   summary: z.string().default(""),
+  /**
+   * focused: the roles named here. broad: anything the CV makes them roughly half-qualified for;
+   * the planner widens the search into adjacent roles and screening accepts stretch roles.
+   */
+  breadth: z.enum(["focused", "broad"]).default("focused"),
   targetRoles: z.array(z.string()).default([]),
   titleInclude: z.array(z.string()).default([]),
   titleExclude: z.array(z.string()).default([]),
@@ -180,4 +185,6 @@ export interface Job {
   salaryMax?: number;
   /** False when the posting can only be finished on a portal needing a human login. */
   autoApplicable: boolean;
+  /** For remote roles: the countries or regions the employer hires from, when it says. */
+  remoteRegions?: string[];
 }

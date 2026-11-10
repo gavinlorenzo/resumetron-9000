@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { BrowserHost } from "./browser.ts";
-import { Ledger } from "./ledger.ts";
+import { type ExclusionKind, Ledger } from "./ledger.ts";
+import { acquireRunLock, dirSize, formatBytes, prune } from "./retention.ts";
 import { createLlm, metered } from "./llm/index.ts";
 import { importPool, interview, readSource } from "./onboard.ts";
 import { type Ctx, buildStandardPlan, packetFor, preparePacket, processForm, run } from "./pipeline.ts";
 import { compose, docToText, identityPlan } from "./resume/compose.ts";
 import { removeSchedule, describeSchedule, installSchedule } from "./schedule.ts";
 import type { Job } from "./schema.ts";
-import { checkBoard } from "./sources.ts";
+import { type Ats, checkBoard, searchSources } from "./sources.ts";
 import { errorMessage, htmlToText, safeFileName, shortHash } from "./util.ts";
 import {
   type Workspace, initWorkspace, loadAnswers, loadConfig, loadGoal, loadPool, loadStandards, workspaceAt, writeYaml,
@@ -185,8 +186,18 @@ standard
 
 program
   .command("boards")
-  .description("check company job-board tokens from goal.yaml")
-  .action(async () => {
+  .description("check company job-board tokens from goal.yaml, or add one to the campaign")
+  .option("--add <ats:token>", "add a board, e.g. greenhouse:acme")
+  .action(async (o) => {
+    if (o.add) {
+      const [ats, token] = String(o.add).split(":");
+      if (!["greenhouse", "lever", "ashby"].includes(ats) || !token) throw new Error("use --add greenhouse:<token>, lever:<token>, or ashby:<token>");
+      const n = await checkBoard(ats as Ats, token);
+      const ledger = new Ledger(ws().ledger);
+      ledger.addBoard(ats as Ats, token, token, "user");
+      ledger.close();
+      return log(`Added ${ats}:${token} (${n} open roles).`);
+    }
     for (const c of loadGoal(ws()).companies) {
       try {
         log(`ok   ${c.ats}:${c.token} (${await checkBoard(c.ats, c.token)} roles)`);
@@ -201,14 +212,138 @@ program
   .description("one pass: find jobs, screen, prepare packets, and submit (in auto mode) within quota")
   .option("--dry-run", "prepare and pre-fill, but never submit")
   .option("--mode <mode>", "tailored | efficiency (overrides config)")
-  .action(async (o) =>
-    withCtx(async (ctx) => {
-      const tally = await run(ctx, { dryRun: o.dryRun, mode: o.mode });
-      log(`\nDone. ${Object.entries(tally).map(([k, v]) => `${k}: ${v}`).join(", ") || "nothing to do"}.`);
-      const waiting = ctx.ledger.byStatus("ready", "needs_human").length;
-      if (waiting) log(`${waiting} application(s) waiting on you: resumetron queue`);
-    }),
-  );
+  .action(async (o) => {
+    const w = ws();
+    const release = acquireRunLock(w.root);
+    // Each run logs to one file per day; old ones are pruned.
+    mkdirSync(join(w.root, "logs"), { recursive: true });
+    const logFile = join(w.root, "logs", `run-${new Date().toISOString().slice(0, 10)}.log`);
+    const runLog = (s: string) => {
+      console.log(s);
+      appendFileSync(logFile, `${new Date().toISOString().slice(11, 19)} ${s}\n`);
+    };
+    try {
+      await withCtx(async (ctx) => {
+        ctx.log = runLog;
+        try {
+          const tally = await run(ctx, { dryRun: o.dryRun, mode: o.mode });
+          runLog(`\nDone. ${Object.entries(tally).map(([k, v]) => `${k}: ${v}`).join(", ") || "nothing to do"}.`);
+          const waiting = ctx.ledger.byStatus("ready", "needs_human").length;
+          if (waiting) runLog(`${waiting} application(s) waiting on you: resumetron queue`);
+        } finally {
+          const p = prune(ctx.ws, ctx.ledger, ctx.cfg.retention);
+          const cleaned = Object.entries(p).filter(([, v]) => v > 0);
+          if (cleaned.length) runLog(`Cleanup: ${cleaned.map(([k, v]) => `${k} ${v}`).join(", ")}`);
+        }
+      });
+    } finally {
+      release();
+    }
+  });
+
+program
+  .command("searches")
+  .description("what the campaign is searching, how deep it has read, and what each search has produced")
+  .option("--all", "include covered and retired searches")
+  .action((o) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      const rows = o.all ? ledger.queries() : ledger.queries("active");
+      log(`${"id".padStart(4)}  ${"source".padEnd(9)} ${"status".padEnd(9)} runs  new  screened  passed  depth  query`);
+      for (const q of rows) {
+        const depth = q.next_page === 0 ? "all" : `p${q.next_page - 1}`;
+        log(`${String(q.id).padStart(4)}  ${q.source.padEnd(9)} ${q.status.padEnd(9)} ${String(q.runs).padStart(4)} ${String(q.fresh).padStart(4)} ${String(q.screened).padStart(9)} ${String(q.matched).padStart(7)}  ${depth.padStart(5)}  ${q.query}${q.location ? ` (${q.location})` : ""}  [${q.origin}]`);
+      }
+      const boards = ledger.boards();
+      if (boards.length) {
+        log(`\nCompany boards:`);
+        for (const b of boards) log(`  ${b.status.padEnd(6)} ${`${b.ats}:${b.token}`.padEnd(32)} ${String(b.seen).padStart(4)} open  ${String(b.matched).padStart(3)} passed  ${b.company} [${b.origin}]`);
+      }
+      log(`\nAdd your own: resumetron search "<query>" [--location <place>] | retire: resumetron search --retire <id>`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("search")
+  .description("add a search to the campaign, or retire one")
+  .argument("[query]")
+  .option("--location <place>", "location filter", "")
+  .option("--retire <id>", "retire a search by id")
+  .action((query: string | undefined, o) => {
+    const w = ws();
+    const cfg = loadConfig(w);
+    const ledger = new Ledger(w.ledger);
+    try {
+      if (o.retire) return log(ledger.retireQuery(Number(o.retire)) ? "Retired." : "No active search with that id.");
+      if (!query) throw new Error("give a query, or --retire <id>");
+      const goal = existsSync(w.goal) ? loadGoal(w) : Goal.parse({});
+      const sources = searchSources(cfg, goal.remoteOk);
+      if (!sources.length) throw new Error("no keyword search sources are enabled in config.yaml");
+      for (const s of sources) ledger.addQuery(s, query, o.location, "user", "added by you");
+      log(`Added "${query}" on ${sources.join(", ")}.`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("exclude")
+  .description("blacklist a title phrase, company, keyword, or single job so it never comes up again")
+  .argument("[kind]", "title | company | keyword | job")
+  .argument("[pattern]")
+  .option("--remove <id>", "remove an exclusion by id")
+  .option("--list", "show all exclusions")
+  .action((kind: string | undefined, pattern: string | undefined, o) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      if (o.remove) return log(ledger.removeExclusion(Number(o.remove)) ? "Removed." : "No exclusion with that id.");
+      if (o.list || !kind) {
+        for (const e of ledger.exclusions()) log(`${String(e.id).padStart(4)}  ${e.kind.padEnd(8)} ${e.pattern.padEnd(30)} ${String(e.hits).padStart(5)} hits  [${e.origin}] ${e.reason ?? ""}`);
+        return;
+      }
+      if (!["title", "company", "keyword", "job"].includes(kind) || !pattern) throw new Error("usage: resumetron exclude <title|company|keyword|job> <pattern>");
+      if (kind === "job") {
+        const row = ledger.get(pattern);
+        if (!row) throw new Error(`no job ${pattern}`);
+        pattern = row.id;
+        if (["discovered", "matched", "ready", "needs_human"].includes(row.status)) ledger.setStatus(row.id, "skipped", { reason: "excluded by you" });
+      }
+      ledger.addExclusion(kind as ExclusionKind, pattern, "user", "added by you");
+      log(`Excluded ${kind} "${pattern}".`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("journal")
+  .description("the campaign's memory: what each run did and why the planner changed course")
+  .option("-n <count>", "entries", "30")
+  .action((o) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      for (const j of ledger.journal(Number(o.n))) log(`${j.at.slice(0, 16).replace("T", " ")}  ${j.kind.padEnd(6)} ${j.text}`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("prune")
+  .description("apply the retention policy now (also runs after every run)")
+  .action(() => {
+    const w = ws();
+    const ledger = new Ledger(w.ledger);
+    try {
+      const before = dirSize(w.root);
+      const p = prune(w, ledger, loadConfig(w).retention);
+      log(`${Object.entries(p).map(([k, v]) => `${k} ${v}`).join(", ")}\nWorkspace: ${formatBytes(before)} -> ${formatBytes(dirSize(w.root))}`);
+    } finally {
+      ledger.close();
+    }
+  });
 
 const STATUS_ORDER = ["ready", "needs_human", "unconfirmed", "submitted", "failed", "matched"] as const;
 
@@ -345,6 +480,8 @@ program
       log(`Workspace ${w.root}\nmode: ${cfg.mode}, submit: ${cfg.submit}, provider: ${cfg.provider.type}${"model" in cfg.provider ? ` (${cfg.provider.model})` : ""}`);
       log(`Quota today: ${ledger.usedToday()}/${cfg.quota.maxPerDay}`);
       log(`Jobs: ${Object.entries(ledger.counts()).map(([k, v]) => `${k} ${v}`).join(", ") || "none yet"}`);
+      log(`Campaign: ${ledger.queries("active").length} active searches, ${ledger.boards("active").length} company boards, ${ledger.exclusions().length} exclusions`);
+      log(`Disk: ledger ${formatBytes(dirSize(w.ledger) + dirSize(`${w.ledger}-wal`))}, packets ${formatBytes(dirSize(w.applications))}, logs ${formatBytes(dirSize(join(w.root, "logs")))}`);
       const usage = ledger.usageSummary();
       if (usage.length) {
         log("Tokens, last 30 days:");

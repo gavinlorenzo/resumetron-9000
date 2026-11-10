@@ -86,8 +86,15 @@ function makeCtx(over: { submit: "review" | "auto"; maxPerRun?: number; answers?
     llm: metered(llm, 1_000_000, (p, u) => ledger.recordUsage(p, u)),
     browser,
     log: () => {},
-    fetchJobs: async () => jobs,
+    sources: {
+      sweep: async () => jobs,
+      search: async () => ({ jobs: [], more: false }),
+      findBoard: async () => null,
+    },
   };
+  ctx.goal.companies = [{ ats: "greenhouse", token: "civic" }];
+  ctx.cfg.campaign.plannerEveryRuns = 0;
+  ctx.cfg.campaign.boardSweepHours = 0;
   return { ctx, llm, ledger };
 }
 

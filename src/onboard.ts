@@ -21,6 +21,7 @@ const INTERVIEW_SYSTEM = `You are the intake interviewer for The Resumetron 9000
 
 Have a natural conversation, one or two questions at a time, building on what they say. Cover:
 - What they want next: role types and titles, seniority, industries or mission areas, what kind of work they'd enjoy versus tolerate.
+- How wide to cast the net: only roles that clearly fit ("focused"), or anything their background makes them roughly half-qualified for ("broad"). Broad campaigns search adjacent roles too and accept stretch roles.
 - Where: cities, remote or hybrid, willingness to relocate.
 - Constraints: salary floor, dealbreakers, companies or sectors to avoid.
 - Target employers: companies or organizations they admire, and what specifically draws them to each one (their reasons go into cover letters, so a sentence or two in their own words is worth getting). Many companies list jobs on Greenhouse, Lever, or Ashby boards (e.g. boards.greenhouse.io/<token>, jobs.lever.co/<token>, jobs.ashbyhq.com/<token>); suggest likely board tokens for companies they name, and the tool will verify them.
@@ -32,7 +33,7 @@ Their CV pool is below, so you can ask informed questions instead of generic one
 const GOAL_SHAPE = `{"say": "<your message to them>", "done": false}
 or, when finished:
 {"say": "<summary>", "done": true,
- "goal": {"summary": "", "targetRoles": [], "titleInclude": [], "titleExclude": [], "keywords": [], "locations": [], "remoteOk": true, "remoteOnly": false, "minSalary": null, "dealbreakers": [], "companies": [{"ats": "greenhouse|lever|ashby", "token": "", "name": "", "notes": "<their reasons, in their words>"}], "searches": [{"query": "", "location": ""}], "blockedCompanies": [], "notes": ""},
+ "goal": {"summary": "", "breadth": "focused|broad", "targetRoles": [], "titleInclude": [], "titleExclude": [], "keywords": [], "locations": [], "remoteOk": true, "remoteOnly": false, "minSalary": null, "dealbreakers": [], "companies": [{"ats": "greenhouse|lever|ashby", "token": "", "name": "", "notes": "<their reasons, in their words>"}], "searches": [{"query": "", "location": ""}], "blockedCompanies": [], "notes": ""},
  "answers": [{"match": "authorized to work", "answer": "Yes"}]}`;
 
 export async function interview(
