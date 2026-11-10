@@ -28,9 +28,14 @@ export function mockLlm(pool: Pool): Llm & { calls: LlmRequest[] } {
           case "cover": {
             const company = req.messages[0].content.match(/Company: (.+)/)![1];
             return {
+              hooks: [
+                { quote: "write briefing memos", angle: "memo drafted as an intern" },
+                { quote: "support community engagement programs", angle: "listening sessions" },
+              ],
               paragraphs: [
                 `Dear ${company} Hiring Team,`,
-                "I am applying for the Policy Analyst role. As a Policy Intern I researched zoning policy in 8 peer cities.",
+                `${company} asks its analysts to write briefing memos that local leaders act on. As a Policy Intern I researched zoning policy in 8 peer cities and drafted the briefing memo council staff used.`,
+                "Your posting also asks for help to support community engagement programs; I organized 3 public listening sessions attended by over 200 residents.",
                 "I also won a Pulitzer Prize in 2019.",
               ],
             };

@@ -173,7 +173,7 @@ standard
       writeYaml(file, { name, targets, keywords, plan });
       const { doc, issues } = compose(ctx.pool, plan);
       const pdf = join(ctx.ws.standards, `${safeFileName(name)}.pdf`);
-      await ctx.browser.renderResume(doc, pdf, ctx.cfg.resume.maxPages);
+      await ctx.browser.renderResume(doc, pdf, ctx.cfg.resume.maxPages, ctx.cfg.resume.fill ? { pool: ctx.pool, reserve: plan.reserve } : undefined);
       log(`Saved ${file}\nPreview: ${pdf}${issues.length ? `\n${issues.length} reworded bullet(s) reverted by the guard.` : ""}`);
     }),
   );

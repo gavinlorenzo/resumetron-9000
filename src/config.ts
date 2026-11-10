@@ -46,7 +46,13 @@ export const Config = z.object({
       maxScreenPerRun: z.number().default(20),
     })
     .prefault({}),
-  resume: z.object({ maxPages: z.number().default(1) }).prefault({}),
+  resume: z
+    .object({
+      maxPages: z.number().default(1),
+      /** Fill leftover space with the tailor's ranked reserve items instead of leaving white space. */
+      fill: z.boolean().default(true),
+    })
+    .prefault({}),
   coverLetter: z
     .object({
       tailored: z.enum(["off", "template", "generated"]).default("generated"),

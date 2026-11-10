@@ -69,10 +69,83 @@ export function compose(pool: Pool, plan: TailorPlan): { doc: ResumeDoc; issues:
   return { doc: { contact: pool.contact, sections }, issues };
 }
 
+/**
+ * Adds one pool unit (bullet, role, entry, inline item, or section) to the document,
+ * bringing along whatever headers it sits under. Added text is always the pool's own wording.
+ * Returns false when the ID is unknown or already shown.
+ */
+export function addUnit(doc: ResumeDoc, pool: Pool, id: string): boolean {
+  const sectionFor = (ps: Section): Section => {
+    let s = doc.sections.find((x) => x.key === ps.key);
+    if (!s) {
+      s = { ...structuredClone(ps), entries: [] } as Section;
+      doc.sections.push(s);
+    }
+    return s;
+  };
+  for (const ps of pool.sections) {
+    if (ps.key === id) {
+      if (doc.sections.some((x) => x.key === id)) return false;
+      doc.sections.push(structuredClone(ps));
+      return true;
+    }
+    for (const pe of ps.entries as any[]) {
+      const has = (list: any[], x: any) => list.some((y) => y.id === x.id);
+      const entryIn = (s: Section, emptyKey: "roles" | "items" | null) => {
+        let e = (s.entries as any[]).find((x) => x.id === pe.id);
+        if (!e) {
+          e = emptyKey ? { ...structuredClone(pe), [emptyKey]: [] } : structuredClone(pe);
+          (s.entries as any[]).push(e);
+        }
+        return e;
+      };
+      if (pe.id === id) {
+        const s = sectionFor(ps);
+        if (has(s.entries, pe)) return false;
+        (s.entries as any[]).push(structuredClone(pe));
+        return true;
+      }
+      if (ps.type === "experience") {
+        for (const pr of pe.roles) {
+          if (pr.id === id) {
+            const e = entryIn(sectionFor(ps), "roles");
+            if (has(e.roles, pr)) return false;
+            e.roles.push(structuredClone(pr));
+            return true;
+          }
+          const pb = pr.bullets.find((b: any) => b.id === id);
+          if (pb) {
+            const e = entryIn(sectionFor(ps), "roles");
+            let r = e.roles.find((x: any) => x.id === pr.id);
+            if (!r) {
+              r = { ...structuredClone(pr), bullets: [] };
+              e.roles.push(r);
+            }
+            if (has(r.bullets, pb)) return false;
+            r.bullets.push(structuredClone(pb));
+            return true;
+          }
+        }
+      }
+      if (ps.type === "inline") {
+        const pi = pe.items.find((i: any) => i.id === id);
+        if (pi) {
+          const e = entryIn(sectionFor(ps), "items");
+          if (has(e.items, pi)) return false;
+          e.items.push(structuredClone(pi));
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /** The plan that reproduces the pool exactly, in pool order. */
 export function identityPlan(pool: Pool): TailorPlan {
   return {
     rationale: "full pool",
+    reserve: [],
     sections: pool.sections.map((s) => ({
       key: s.key,
       entries: s.entries.map((e: any) =>

@@ -65,10 +65,24 @@ export function contentStems(text: string): Set<string> {
   );
 }
 
-/** True when every name in `text` occurs somewhere in `allowed` (as a word or phrase part). */
+/** Initialisms of every run of capitalized words: "Model United Nations" -> mun, un, mu. */
+function initialisms(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const run of text.match(/(?:\b[A-Z][\w'’-]*(?:\s+(?:of|and|for|the|&)\s+|\s+)?){2,}/g) ?? []) {
+    const caps = run.split(/\s+/).filter((w) => /^[A-Z]/.test(w)).map((w) => w[0].toLowerCase());
+    for (let i = 0; i < caps.length; i++)
+      for (let j = i + 2; j <= caps.length; j++) out.add(caps.slice(i, j).join(""));
+  }
+  return out;
+}
+
+/** Names in `text` that occur nowhere in `allowed`, as a word, phrase part, or initialism. */
 function unknownNames(text: string, allowed: string): string[] {
   const corpus = ` ${allowed.toLowerCase().replace(/[^a-z0-9+#.]+/g, " ")} `;
-  return [...namesIn(text)].filter((n) => !corpus.includes(` ${n.replace(/[^a-z0-9+#.]+/g, " ").trim()} `));
+  const inits = initialisms(allowed);
+  return [...namesIn(text)].filter(
+    (n) => !corpus.includes(` ${n.replace(/[^a-z0-9+#.]+/g, " ").trim()} `) && !inits.has(n),
+  );
 }
 
 function unknownNumbers(text: string, allowed: string): string[] {

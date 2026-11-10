@@ -150,18 +150,29 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
   const plan = standard ? standard.plan : await tailorPlan(ctx.llm, pool, ctx.goal, job);
   const { doc, issues } = compose(pool, plan);
   const resumePath = join(dir, `${base}_Resume.pdf`);
-  const rendered = await ctx.browser.renderResume(doc, resumePath, cfg.resume.maxPages);
+  const rendered = await ctx.browser.renderResume(
+    doc,
+    resumePath,
+    cfg.resume.maxPages,
+    cfg.resume.fill ? { pool, reserve: plan.reserve } : undefined,
+  );
   const resumeText = docToText(rendered.doc);
+  if (rendered.fillRatio < 0.75) {
+    ctx.log(`  note: the page is only ${Math.round(rendered.fillRatio * 100)}% full; your pool may be thin for this kind of role`);
+  }
 
   let coverPath: string | undefined;
   let coverText: string | undefined;
   let removed: string[] = [];
+  let coverCheck: { hooks: string[]; problems: string[] } | undefined;
   const coverMode = mode === "efficiency" ? cfg.coverLetter.efficiency : cfg.coverLetter.tailored;
   let paragraphs: string[] | undefined;
   if (coverMode === "generated") {
     const letter = await writeCoverLetter(ctx.llm, pool, ctx.goal, job, resumeText);
     paragraphs = letter.paragraphs;
     removed = letter.removed;
+    coverCheck = { hooks: letter.hooks, problems: letter.problems };
+    if (letter.problems.length) ctx.log(`  cover letter still generic after revision: ${letter.problems.join("; ")}`);
   } else if (coverMode === "template" && existsSync(ctx.ws.coverTemplate)) {
     paragraphs = templateCoverLetter(readFileSync(ctx.ws.coverTemplate, "utf8"), job, pool);
   }
@@ -181,7 +192,13 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
         standard: standard?.name,
         plan,
         guard: { revertedBullets: issues, removedCoverSentences: removed },
-        render: { trimmedUnits: rendered.trimmed, fontPt: rendered.fontPt },
+        cover: coverCheck,
+        render: {
+          fontPt: rendered.fontPt,
+          fillRatio: Math.round(rendered.fillRatio * 100) / 100,
+          reserveAdded: rendered.added,
+          trimmedUnits: rendered.trimmed,
+        },
       },
       null,
       2,

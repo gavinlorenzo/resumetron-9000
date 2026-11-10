@@ -90,6 +90,8 @@ export const CompanyBoard = z.object({
   ats: z.enum(["greenhouse", "lever", "ashby"]),
   token: z.string(),
   name: z.string().optional(),
+  /** Your own reasons for wanting to work there. Cover letters may draw on these. */
+  notes: z.string().optional(),
 });
 
 export const Goal = z.object({
@@ -142,6 +144,11 @@ export const TailorPlan = z.object({
       ),
     }),
   ),
+  /**
+   * IDs (bullet, role, entry, inline item, or section key) worth showing if space remains,
+   * best first. The renderer adds them in order until the page is full.
+   */
+  reserve: z.array(z.string()).default([]),
   rationale: z.string().default(""),
 });
 export type TailorPlan = z.infer<typeof TailorPlan>;

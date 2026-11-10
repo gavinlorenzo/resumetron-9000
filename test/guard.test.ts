@@ -51,7 +51,7 @@ test("compose copies facts from the pool and reverts a fabricated rewrite", () =
 });
 
 test("compose ignores unknown ids and always keeps education", () => {
-  const { doc } = compose(pool, { rationale: "", sections: [{ key: "work", entries: [{ id: "made-up-job" }, { id: "cafe" }] }] });
+  const { doc } = compose(pool, { rationale: "", reserve: [], sections: [{ key: "work", entries: [{ id: "made-up-job" }, { id: "cafe" }] }] });
   assert.deepEqual(doc.sections.map((s) => s.key), ["work", "education"]);
 });
 
@@ -66,5 +66,8 @@ test("cover letter sentences with unknown facts are flagged", () => {
   assert.equal(checkProse("Dear Example Civic Labs Hiring Team, I researched policy in 8 peer cities.", allowed).length, 0);
   assert.equal(checkProse("As Springfield's policy intern I studied eight peer cities.", allowed).length, 0, "possessives and number words");
   assert.equal(checkProse("I studied nine peer cities.", allowed).length, 1, "spelled-out numbers are checked too");
+  const mun = "Head Delegate, Alabama Model United Nations Travel Team";
+  assert.equal(checkProse("I led the Alabama Model UN team and its MUN travel.", mun).length, 0, "initialisms of known names");
+  assert.equal(checkProse("I briefed the NSA on it.", mun).length, 1, "unrelated acronyms are still caught");
   assert.equal(checkProse("I also interned at the White House for 2 years.", allowed).length, 1);
 });

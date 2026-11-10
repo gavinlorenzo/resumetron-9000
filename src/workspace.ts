@@ -96,6 +96,7 @@ matching:
 
 resume:
   maxPages: 1
+  fill: true          # top up a short page with the tailor's ranked extras; false = core picks only
 
 coverLetter:
   tailored: generated   # off | template | generated

@@ -1,7 +1,7 @@
 import { type Browser, type Page, chromium } from "playwright";
 import { coverHtml, resumeHtml } from "./resume/template.ts";
-import { trimOnce } from "./resume/compose.ts";
-import type { Contact, ResumeDoc } from "./schema.ts";
+import { addUnit, trimOnce } from "./resume/compose.ts";
+import type { Contact, Pool, ResumeDoc } from "./schema.ts";
 
 // Letter paper minus 0.5in margins, at 96 CSS px per inch.
 const CONTENT_WIDTH_PX = 720;
@@ -48,18 +48,28 @@ export class BrowserHost {
     }
   }
 
-  /** Renders the resume, shrinking type then trimming the least relevant lines until it fits. */
-  async renderResume(input: ResumeDoc, outPath: string, maxPages = 1): Promise<{ doc: ResumeDoc; trimmed: number; fontPt: number }> {
-    const doc: ResumeDoc = structuredClone(input);
+  /**
+   * Renders the resume. Overflow: shrink type (11pt down to 10pt), then trim the least
+   * relevant lines. Underflow: add `fill.reserve` units in rank order while they fit.
+   * Type is never enlarged to fake a full page.
+   */
+  async renderResume(
+    input: ResumeDoc,
+    outPath: string,
+    maxPages = 1,
+    fill?: { pool: Pool; reserve: string[] },
+  ): Promise<{ doc: ResumeDoc; trimmed: number; added: number; fontPt: number; fillRatio: number }> {
+    let doc: ResumeDoc = structuredClone(input);
     const page = await this.newPage(true);
     try {
       await page.setViewportSize({ width: CONTENT_WIDTH_PX, height: CONTENT_HEIGHT_PX });
       await page.emulateMedia({ media: "print" });
       const limit = CONTENT_HEIGHT_PX * maxPages - 4;
-      const height = async (pt: number) => {
-        await page.setContent(resumeHtml(doc, pt));
+      const measure = async (d: ResumeDoc, pt: number) => {
+        await page.setContent(resumeHtml(d, pt));
         return page.evaluate(() => document.body.getBoundingClientRect().height);
       };
+      const height = (pt: number) => measure(doc, pt);
       let fontPt = FONT_STEPS[0];
       let trimmed = 0;
       for (;;) {
@@ -77,9 +87,22 @@ export class BrowserHost {
         }
         trimmed++;
       }
+      let added = 0;
+      if (fill && trimmed === 0) {
+        for (const id of fill.reserve) {
+          const trial = structuredClone(doc);
+          if (!addUnit(trial, fill.pool, id)) continue;
+          // A unit that doesn't fit is skipped; smaller ones further down may still fit.
+          if ((await measure(trial, fontPt)) <= limit) {
+            doc = trial;
+            added++;
+          }
+        }
+      }
+      const fillRatio = (await height(fontPt)) / (CONTENT_HEIGHT_PX * maxPages);
       await page.setContent(resumeHtml(doc, fontPt));
       await page.pdf({ path: outPath, format: "Letter", printBackground: true, preferCSSPageSize: true });
-      return { doc, trimmed, fontPt };
+      return { doc, trimmed, added, fontPt, fillRatio };
     } finally {
       await page.close();
     }

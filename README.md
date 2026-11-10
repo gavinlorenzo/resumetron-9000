@@ -63,7 +63,13 @@ Everything personal lives in `~/.resumetron` (or `--home`, or `$RESUMETRON_HOME`
 
 ## The resume format
 
-One page by default: centered name and contact line, ruled uppercase section headings, `Organization | Location` over `Title | Dates` entries (or title-first for ordinary jobs), round bullets, serif type. Tailoring reorders sections and entries by relevance and drops what doesn't help. If the page runs long, it first shrinks the type slightly (down to 10pt), then trims the least relevant lines. Education is never dropped. `resumetron render` prints your whole pool in this format with no AI involved.
+One page by default: centered name and contact line, ruled uppercase section headings, `Organization | Location` over `Title | Dates` entries (or title-first for ordinary jobs), round bullets, serif type. `resumetron render` prints your whole pool in this format with no AI involved.
+
+**Page policy: relevance first, then fill.** A half-empty page reads as thin experience, and padding with fluff reads worse. The tailor puts the strongest material for the posting first, then ranks everything else that is still honest, useful context (transferable jobs, honors, coursework) as a reserve. The renderer adds reserve items in that order while they fit, so the page ends full of the right things. Type stays at 11pt. On overflow it shrinks slightly (never below 10pt), then trims the least relevant lines. It is never enlarged to fake a full page. Education is never dropped. Each packet records how full the page is, and a page under 75% full is flagged: your pool may be thin for that kind of role. Set `resume.fill: false` to send only the core picks.
+
+## Cover letters
+
+A letter has to be visibly written for one job. The writer first pulls short quotes from the posting: the mission in the company's words, the team, named responsibilities and programs. Each quote is confirmed to really appear in the posting. The letter is then built around them, pairing each requirement with a real accomplishment. A letter that doesn't build on at least two of those details, doesn't name the company in its body, or leans on stock phrases ("passionate", "great fit") gets one revision with that feedback. Your own reasons for wanting to work somewhere (`notes` on a company in `goal.yaml`, which the interview asks for) are fair game. Outside facts about the company are not.
 
 ## Modes
 
