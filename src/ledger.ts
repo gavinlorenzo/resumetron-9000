@@ -27,6 +27,10 @@ export interface JobRow {
   reason: string | null;
   packet_dir: string | null;
   origin: string | null; // "q:<query id>" or "b:<ats>:<token>": which search surfaced it
+  track_id: number | null;
+  outcome: Outcome | null;
+  channel: string | null; // form | email | manual
+  email_msg_id: string | null;
   job_json: string;
   discovered_at: string;
   prepared_at: string | null;
@@ -42,6 +46,7 @@ export interface QueryRow {
   origin: string; // goal | agent | user
   status: "active" | "exhausted" | "retired";
   next_page: number; // next deep page to read; 0 once the result list has been read to its end
+  track_id: number | null;
   runs: number;
   seen: number;
   fresh: number;
@@ -68,6 +73,33 @@ export interface BoardRow {
 }
 
 export type ExclusionKind = "title" | "company" | "keyword" | "job";
+
+/** What an employer did with an application. Silence is inferred from age, never stored. */
+export type Outcome = "none" | "acknowledged" | "rejected" | "interview" | "offer";
+export const OUTCOME_RANK: Record<Outcome, number> = { none: 0, acknowledged: 1, rejected: 2, interview: 3, offer: 4 };
+
+export interface TrackRow {
+  id: number;
+  name: string;
+  hypothesis: string;
+  /** proposed: exploring on a small quota slice. active: in rotation. cemented: proven, protected share. retired: dropped. */
+  status: "proposed" | "active" | "cemented" | "retired";
+  roles: string[];
+  created_at: string;
+  updated_at: string;
+  note: string | null;
+}
+
+export interface SentApplication {
+  id: string;
+  company: string;
+  title: string;
+  track_id: number | null;
+  outcome: Outcome | null;
+  submitted_at: string;
+  email_msg_id: string | null;
+  url: string;
+}
 
 export interface ExclusionRow {
   id: number;
@@ -103,6 +135,7 @@ export class Ledger {
     }
     this.db.exec(`
       PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = NORMAL; -- safe with WAL; avoids a disk flush per write
       CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY, source TEXT, company TEXT, title TEXT, location TEXT,
         url TEXT, apply_url TEXT, fingerprint TEXT, status TEXT NOT NULL,
@@ -134,7 +167,22 @@ export class Ledger {
       CREATE TABLE IF NOT EXISTS journal (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
     `);
-    for (const [table, col] of [["jobs", "origin TEXT"], ["jobs", "updated_at TEXT"], ["queries", "screened INTEGER NOT NULL DEFAULT 0"], ["boards", "screened INTEGER NOT NULL DEFAULT 0"]]) {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tracks (
+        id INTEGER PRIMARY KEY, name TEXT NOT NULL, hypothesis TEXT NOT NULL, status TEXT NOT NULL,
+        roles TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, note TEXT
+      );
+      CREATE TABLE IF NOT EXISTS emails (
+        message_id TEXT PRIMARY KEY, job_id TEXT, at TEXT NOT NULL, from_domain TEXT, subject TEXT,
+        kind TEXT NOT NULL, matched_by TEXT
+      );
+    `);
+    for (const [table, col] of [
+      ["jobs", "origin TEXT"], ["jobs", "updated_at TEXT"], ["jobs", "track_id INTEGER"], ["jobs", "outcome TEXT"],
+      ["jobs", "outcome_at TEXT"], ["jobs", "channel TEXT"], ["jobs", "email_msg_id TEXT"],
+      ["queries", "screened INTEGER NOT NULL DEFAULT 0"], ["queries", "track_id INTEGER"],
+      ["boards", "screened INTEGER NOT NULL DEFAULT 0"],
+    ]) {
       try {
         this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
       } catch {} // already present
@@ -167,6 +215,19 @@ export class Ledger {
     );
     const upgrade = this.db.prepare("UPDATE jobs SET url = ?, apply_url = ?, job_json = ?, updated_at = ? WHERE id = ?");
     let fresh = 0;
+    this.db.exec("BEGIN");
+    try {
+      fresh = this.addJobsInner(jobs, origin, find, insert, upgrade);
+      this.db.exec("COMMIT");
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
+    return { fresh, seen: jobs.length };
+  }
+
+  private addJobsInner(jobs: Job[], origin: string, find: any, insert: any, upgrade: any): number {
+    let fresh = 0;
     for (const j of jobs) {
       const existing = find.get(j.id, fingerprint(j)) as any;
       if (existing) {
@@ -183,7 +244,20 @@ export class Ledger {
       insert.run(j.id, j.source, j.company, j.title, j.location, j.url, j.applyUrl, fingerprint(j), JSON.stringify(j), origin, t, t);
       fresh++;
     }
-    return { fresh, seen: jobs.length };
+    return fresh;
+  }
+
+  /** Runs several writes as one transaction: one commit instead of one per row. */
+  batch<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const r = fn();
+      this.db.exec("COMMIT");
+      return r;
+    } catch (e) {
+      this.db.exec("ROLLBACK");
+      throw e;
+    }
   }
 
   get(id: string): JobRow | undefined {
@@ -259,13 +333,79 @@ export class Ledger {
     }
   }
 
+  setTrack(jobId: string, trackId: number | null): void {
+    this.db.prepare("UPDATE jobs SET track_id = ? WHERE id = ?").run(trackId, jobId);
+  }
+
+  setChannel(jobId: string, channel: string, emailMsgId?: string): void {
+    this.db.prepare("UPDATE jobs SET channel = ?, email_msg_id = COALESCE(?, email_msg_id) WHERE id = ?").run(channel, emailMsgId ?? null, jobId);
+  }
+
+  /** Records what an employer did. Outcomes only move forward: an interview stays an interview. */
+  setOutcome(jobId: string, outcome: Outcome): boolean {
+    const row = this.db.prepare("SELECT outcome FROM jobs WHERE id = ?").get(jobId) as any;
+    if (!row || OUTCOME_RANK[outcome] <= OUTCOME_RANK[(row.outcome as Outcome) ?? "none"]) return false;
+    this.db.prepare("UPDATE jobs SET outcome = ?, outcome_at = ? WHERE id = ?").run(outcome, now(), jobId);
+    return true;
+  }
+
+  /** Applications that went out, for outcome statistics and for matching replies. */
+  sentApplications(sinceDays = 365): SentApplication[] {
+    return this.db
+      .prepare(
+        `SELECT id, company, title, track_id, outcome, submitted_at, email_msg_id, url FROM jobs
+         WHERE status IN ('submitted','unconfirmed') AND submitted_at >= ? ORDER BY submitted_at DESC`,
+      )
+      .all(daysAgo(sinceDays)) as any[];
+  }
+
+  // ---------------- tracks ----------------
+
+  addTrack(name: string, hypothesis: string, roles: string[], status: TrackRow["status"]): number {
+    const t = now();
+    const r = this.db
+      .prepare("INSERT INTO tracks (name, hypothesis, status, roles, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(name, hypothesis, status, JSON.stringify(roles), t, t);
+    return Number(r.lastInsertRowid);
+  }
+
+  tracks(...statuses: TrackRow["status"][]): TrackRow[] {
+    const where = statuses.length ? `WHERE status IN (${statuses.map(() => "?").join(",")})` : "";
+    return (this.db.prepare(`SELECT * FROM tracks ${where} ORDER BY id`).all(...statuses) as any[]).map((r) => ({ ...r, roles: JSON.parse(r.roles) }));
+  }
+
+  updateTrack(id: number, fields: Partial<Pick<TrackRow, "hypothesis" | "status" | "note" | "roles">>): void {
+    const cur = this.tracks().find((t) => t.id === id);
+    if (!cur) return;
+    const next = { ...cur, ...fields };
+    this.db
+      .prepare("UPDATE tracks SET hypothesis = ?, status = ?, note = ?, roles = ?, updated_at = ? WHERE id = ?")
+      .run(next.hypothesis, next.status, next.note ?? null, JSON.stringify(next.roles), now(), id);
+  }
+
+  // ---------------- email ----------------
+
+  hasEmail(messageId: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM emails WHERE message_id = ?").get(messageId));
+  }
+
+  recordEmail(e: { messageId: string; jobId: string | null; fromDomain: string; subject: string; kind: string; matchedBy: string | null }): void {
+    this.db
+      .prepare("INSERT OR IGNORE INTO emails (message_id, job_id, at, from_domain, subject, kind, matched_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(e.messageId, e.jobId, now(), e.fromDomain, e.subject.slice(0, 200), e.kind, e.matchedBy);
+  }
+
+  recentEmails(limit: number): { at: string; job_id: string | null; from_domain: string; subject: string; kind: string; matched_by: string | null }[] {
+    return this.db.prepare("SELECT * FROM emails WHERE job_id IS NOT NULL ORDER BY at DESC LIMIT ?").all(limit) as any[];
+  }
+
   // ---------------- searches ----------------
 
-  addQuery(source: string, query: string, location: string, origin: string, why: string): boolean {
+  addQuery(source: string, query: string, location: string, origin: string, why: string, trackId: number | null = null): boolean {
     const norm = `${source}|${normalize(query)}|${normalize(location)}`;
     const r = this.db
-      .prepare("INSERT OR IGNORE INTO queries (source, query, location, norm, origin, why, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(source, query.trim(), location.trim(), norm, origin, why, now());
+      .prepare("INSERT OR IGNORE INTO queries (source, query, location, norm, origin, why, created_at, track_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(source, query.trim(), location.trim(), norm, origin, why, now(), trackId);
     return r.changes > 0;
   }
 

@@ -163,6 +163,7 @@ const PLANNER_SYSTEM = `You run the search side of one person's job hunt. Each r
 - Lean into what is working: searches whose results pass screening deserve variations. Retire an active search (by id) only once its results have been screened and keep failing; the software declines a retirement until at least three of a search's jobs have been screened with none passing, or the search has gone dry. Results wait in a backlog and are screened a few per run, so a new search with zero passes usually just hasn't been judged yet.
 - Companies: name specific employers likely to hire someone with this background. The software checks whether each has a public job board and, if so, reads all of its openings.
 - Exclusions remove jobs before anyone spends effort on them. Propose a title or company exclusion only for a pattern you see rejected again and again in the evidence. The software accepts one only when at least three screened jobs were rejected under it and none worth applying to would be blocked.
+- A weekly strategist sets the campaign's hypotheses ("strategy tracks"). Your searches should serve those tracks: fill gaps in their coverage rather than opening unrelated directions.
 - In "note", write one or two sentences on what you're seeing and why you made these changes. It is the campaign's memory for future runs.`;
 
 const PLAN_SHAPE = `{"addQueries": [{"query": "", "location": "", "why": ""}], "retire": [<query id>], "addCompanies": [{"name": "", "why": ""}], "addExclusions": [{"kind": "title|company", "pattern": "", "reason": ""}], "note": ""}`;
@@ -176,6 +177,7 @@ export async function planCampaign(ctx: CampaignCtx): Promise<Plan> {
     activeSearches: qs.filter((q) => q.status === "active").slice(-60).map((q) => ({ id: q.id, source: q.source, query: q.query, location: q.location, runs: q.runs, newJobs: q.fresh, screened: q.screened, passedScreening: q.matched })),
     coveredSearches: qs.filter((q) => q.status !== "active").slice(-40).map((q) => `${q.query} (${q.source}, ${q.status}, ${q.fresh} new, ${q.matched} passed)`),
     boards: ledger.boards().slice(-60).map((b) => `${b.company} (${b.status}, ${b.seen} open, ${b.matched} passed)`),
+    strategyTracks: ledger.tracks("proposed", "active", "cemented").map((t) => `${t.name}: ${t.hypothesis}`),
     exclusions: ledger.exclusions().map((e) => `${e.kind}: ${e.pattern}`),
     recentRejections: ledger.recentRejections(40).map((r) => `${r.title}: ${r.reason.replace(/^screened: /, "")}`),
     recentNotes: ledger.journal(8).map((j) => j.text),

@@ -110,6 +110,33 @@ export const Config = z.object({
         .optional(),
     })
     .prefault({}),
+  /** IMAP/SMTP: reads employer replies to track outcomes, and applies by email where a posting asks for it. */
+  email: z
+    .object({
+      provider: z.enum(["gmail", "outlook", "custom"]).default("custom"),
+      address: z.string(),
+      user: z.string().optional(), // defaults to address
+      passwordEnv: z.string().default("RESUMETRON_EMAIL_PASSWORD"),
+      imap: z.object({ host: z.string(), port: z.number().default(993), secure: z.boolean().default(true) }).optional(),
+      smtp: z.object({ host: z.string(), port: z.number().default(465), secure: z.boolean().default(true) }).optional(),
+      fromName: z.string().optional(),
+      /** Apply by email when a posting asks for it (still subject to `submit` and quotas). */
+      send: z.boolean().default(true),
+      /** Messages read per run, newest last. */
+      maxPerSync: z.number().default(200),
+    })
+    .optional(),
+  strategy: z
+    .object({
+      reviewEveryDays: z.number().default(7),
+      /** New tracks the strategist proposes start exploring on a small slice; true makes them full tracks at once. */
+      autoApprove: z.boolean().default(false),
+      explorationShare: z.number().default(0.1),
+      minShare: z.number().default(0.1),
+      cementedMinShare: z.number().default(0.25),
+      maxTracks: z.number().default(5),
+    })
+    .prefault({}),
   browser: z
     .object({
       headless: z.boolean().default(true),

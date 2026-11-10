@@ -12,6 +12,8 @@ import { compose, docToText } from "./resume/compose.ts";
 import { type CampaignCtx, applyPlan, discoverBoards, gather, matchesExclusion, planCampaign, sweepNewBoards, syncGoal } from "./campaign.ts";
 import { type AnswerBank, type Goal, type Job, type Pool, type Standard, TailorPlan } from "./schema.ts";
 import { type SourceSet, liveSources } from "./sources.ts";
+import { type Mailbox, applicationEmail, applyByEmailAddress, hasSendInstructions, syncInbox } from "./email.ts";
+import { allocate, maybeReview, slots, trackStats } from "./strategy.ts";
 import { tailorPlan, templateCoverLetter, writeCoverLetter } from "./tailor.ts";
 import { errorMessage, safeFileName, sleep } from "./util.ts";
 import type { Workspace } from "./workspace.ts";
@@ -28,6 +30,7 @@ export interface Ctx {
   browser: BrowserHost;
   log: (s: string) => void;
   sources?: SourceSet;
+  mailbox?: Mailbox;
 }
 
 export interface RunOptions {
@@ -53,7 +56,26 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
   const runNo = Number(ledger.meta("runs") ?? 0) + 1;
   ledger.setMeta("runs", String(runNo));
 
-  // 0. Plan: widen or narrow the search from what earlier runs found.
+  // 0a. Outcomes: read employer replies so the strategy works from real results.
+  if (ctx.mailbox) {
+    try {
+      const inbox = await syncInbox(ctx.mailbox, ledger, { llm: ctx.llm, limit: cfg.email?.maxPerSync ?? 200, log });
+      if (inbox.outcomes.length) log(`Inbox: ${inbox.outcomes.join("; ")}`);
+      for (const o of inbox.outcomes) ledger.note("outcome", o);
+    } catch (e) {
+      log(`  inbox check skipped: ${errorMessage(e)}`);
+    }
+  }
+
+  // 0b. Strategy: opening hypotheses on the first run, then a weekly review.
+  try {
+    const memo = await maybeReview({ cfg, goal, pool: ctx.pool, ledger, llm: ctx.llm, root: ctx.ws.root, log });
+    if (memo) log(`Strategy memo: ${memo}`);
+  } catch (e) {
+    log(`  strategy review skipped: ${errorMessage(e)}`);
+  }
+
+  // 0c. Plan: widen or narrow the search from what earlier runs found.
   syncGoal(camp);
   const every = cfg.campaign.plannerEveryRuns;
   const planHere = every > 0 && runNo % every === 0 && (mode === "tailored" || cfg.campaign.plannerInEfficiencyMode);
@@ -82,6 +104,7 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
   const targets = broad ? [...goalTargets(goal), ...ledger.queries("active").map((q) => q.query)] : goalTargets(goal);
   const keywords = broad ? [...new Set([...goalKeywords(goal), ...poolTags(ctx.pool)])] : goalKeywords(goal);
   const hits = new Map<number, number>();
+  ledger.batch(() => {
   for (const row of ledger.byStatus("discovered")) {
     const job = ledger.job(row);
     const ex = exclusions.find((e) => matchesExclusion(e, job));
@@ -97,6 +120,7 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     bump("rejected");
   }
   for (const [id, n] of hits) ledger.hitExclusion(id, n);
+  });
 
   let room = Math.min(cfg.quota.maxPerRun, cfg.quota.maxPerDay - ledger.usedToday());
   if (room <= 0) {
@@ -114,11 +138,17 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     for (const row of pending) {
       const job = ledger.job(row);
       const best = pickStandard(job, ctx.standards, cfg.efficiency.minStandardScore);
-      if (best) picks.push({ row, job, standard: best.standard });
+      if (!best) continue;
+      if (row.track_id == null) {
+        row.track_id = originTrack(ledger, row.origin);
+        ledger.setTrack(row.id, row.track_id);
+      }
+      picks.push({ row, job, standard: best.standard });
     }
   } else {
     const candidate = docToText(ctx.pool);
     const minFit = broad ? cfg.matching.minFitBroad : cfg.matching.minFit;
+    const liveTracks = ledger.tracks("proposed", "active", "cemented");
     let screened = 0;
     for (const row of pending) {
       if (row.reason?.startsWith("screened")) {
@@ -132,8 +162,11 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
         continue;
       }
       try {
-        const s = await screenJob(ctx.llm, job, goal, candidate);
+        const s = await screenJob(ctx.llm, job, goal, candidate, liveTracks);
         screened++;
+        const trackId = liveTracks.some((t) => t.id === s.track) ? s.track! : originTrack(ledger, row.origin);
+        ledger.setTrack(row.id, trackId);
+        row.track_id = trackId;
         if (s.dealbreaker || s.fit < minFit) {
           ledger.setStatus(row.id, "rejected", { fit: s.fit, reason: `screened: ${s.reason}` });
           ledger.credit(row.origin, false);
@@ -166,8 +199,10 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     }
   }
 
-  // 3. Prepare and apply, best first, within quota.
-  for (const p of picks) {
+  // 3. Prepare and apply within quota: each strategy track gets its share of today's slots,
+  // best fit first within a track; slots a track can't use go to the best remaining jobs.
+  const order = orderByStrategy(ctx, picks, room, mode);
+  for (const p of order) {
     if (room <= 0) break;
     if (ledger.companyCount30d(p.job.company) >= cfg.quota.maxPerCompanyPer30Days) continue;
     log(`\n> ${p.job.company} | ${p.job.title}  (fit ${p.row.fit ?? "?"})`);
@@ -192,6 +227,32 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
   }
   ledger.note("run", `run ${runNo}: ${Object.entries(tally).map(([k, v]) => `${k} ${v}`).join(", ") || "nothing new"}`);
   return tally;
+}
+
+/** The track of the search that surfaced a job, if it has one. */
+function originTrack(ledger: Ledger, origin: string | null): number | null {
+  if (!origin?.startsWith("q:")) return null;
+  const row = ledger.db.prepare("SELECT track_id FROM queries WHERE id = ?").get(Number(origin.slice(2))) as any;
+  return row?.track_id ?? null;
+}
+
+/** Orders candidates so today's slots follow the strategy's quota shares. */
+function orderByStrategy<P extends { row: JobRow }>(ctx: Ctx, picks: P[], room: number, mode: Config["mode"]): P[] {
+  const stats = trackStats(ctx.ledger, mode);
+  const live = new Set(stats.filter((s) => s.track.status !== "retired").map((s) => s.track.id));
+  if (!live.size) return picks;
+  const quota = slots(allocate(stats, ctx.cfg.strategy), room);
+  const first: P[] = [];
+  const rest: P[] = [];
+  const used = new Map<number, number>();
+  for (const p of picks) {
+    const t = p.row.track_id;
+    if (t != null && live.has(t) && (used.get(t) ?? 0) < (quota.get(t) ?? 0)) {
+      used.set(t, (used.get(t) ?? 0) + 1);
+      first.push(p);
+    } else rest.push(p);
+  }
+  return [...first, ...rest];
 }
 
 /** Bullet tags from the pool: the vocabulary a broad search scores postings against. */
@@ -299,6 +360,24 @@ export interface FormResult {
   detail: string;
 }
 
+/**
+ * Applies by email when the posting asks for it: the address must come from the posting itself.
+ * Drafted first (email.txt in the packet); sent only when submitting is allowed.
+ */
+async function emailApplication(ctx: Ctx, job: Job, packet: Packet, submit: boolean): Promise<FormResult> {
+  const msg = applicationEmail(job, ctx.pool.contact.name, packet.coverText, packet.resumePath, packet.coverPath);
+  writeFileSync(join(packet.dir, "email.txt"), `To: ${msg.to}\nSubject: ${msg.subject}\nAttachments: ${msg.attachments.map((a) => a.split(/[\\/]/).pop()).join(", ")}\n\n${msg.text}\n`);
+  ctx.ledger.setChannel(job.id, "email");
+  if (hasSendInstructions(job)) {
+    return { status: "needs_human", detail: `the posting has its own instructions for email applications; check the draft in ${join(packet.dir, "email.txt")}` };
+  }
+  if (!submit) return { status: "ready", detail: `email application drafted to ${msg.to}` };
+  if (!ctx.mailbox) return { status: "needs_human", detail: "email is not configured; the draft is in email.txt" };
+  const id = await ctx.mailbox.send(msg);
+  ctx.ledger.setChannel(job.id, "email", id);
+  return { status: "submitted", detail: `emailed to ${msg.to}` };
+}
+
 /** Opens the application form, fills it, and submits only when told to. */
 export async function processForm(
   ctx: Ctx,
@@ -307,6 +386,7 @@ export async function processForm(
   opts: { submit: boolean; mode: Config["mode"]; headless?: boolean; keepOpen?: boolean },
 ): Promise<FormResult> {
   if (!job.autoApplicable) {
+    if (ctx.cfg.email?.send && applyByEmailAddress(job)) return emailApplication(ctx, job, packet, opts.submit);
     return { status: "needs_human", detail: `finish on ${new URL(job.applyUrl).host}; your documents are in ${packet.dir}` };
   }
   const page = await ctx.browser.newPage(opts.headless);

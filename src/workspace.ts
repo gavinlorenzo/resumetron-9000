@@ -115,6 +115,19 @@ efficiency:
 #     appKeyEnv: ADZUNA_APP_KEY
 #     country: us
 
+strategy:
+  reviewEveryDays: 7     # weekly hypothesis review
+  autoApprove: false     # new tracks the strategist proposes explore on a small slice until you approve them
+  maxTracks: 5
+
+# Email: reads employer replies to count outcomes, and applies by email when a
+# posting asks for that. Use an app password, never your main password.
+# email:
+#   provider: gmail            # gmail | outlook | custom (then set imap/smtp hosts)
+#   address: you@gmail.com
+#   passwordEnv: RESUMETRON_EMAIL_PASSWORD
+#   send: true                 # still follows submit: review | auto
+
 browser:
   headless: true
 `;

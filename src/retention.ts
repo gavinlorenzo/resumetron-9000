@@ -56,6 +56,8 @@ export function prune(ws: Workspace, ledger: Ledger, r: Config["retention"]): Pr
   db.prepare("DELETE FROM queries WHERE status != 'active' AND id NOT IN (SELECT id FROM queries WHERE status != 'active' ORDER BY id DESC LIMIT ?)").run(r.inactiveQueriesMax);
   db.prepare("DELETE FROM probes WHERE at < ?").run(daysAgo(r.probeDays));
   db.prepare("DELETE FROM usage_daily WHERE day < ?").run(daysAgo(400).slice(0, 10));
+  db.prepare("DELETE FROM emails WHERE at < ?").run(daysAgo(400));
+  db.prepare("DELETE FROM emails WHERE message_id NOT IN (SELECT message_id FROM emails ORDER BY at DESC LIMIT 3000)").run();
 
   // 5. Packets: screenshots expire for anything not waiting on you; dead packets go entirely.
   const waiting = new Set((db.prepare("SELECT packet_dir FROM jobs WHERE status IN ('ready','needs_human') AND packet_dir IS NOT NULL").all() as any[]).map((x) => x.packet_dir));

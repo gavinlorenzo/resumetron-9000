@@ -7,7 +7,9 @@ Open-source, provider-agnostic job application agent: a TypeScript CLI on Node 2
 - **No fabrication.** Resume facts come from the pool by ID (`src/resume/compose.ts`). Model text is checked by `src/guard.ts`. Reverts and removals are logged in each packet's `packet.json`, never silently dropped.
 - **Personal questions are never answered by a model.** These are anything matching `SENSITIVE` in `src/forms/resolve.ts`, plus every multiple-choice field. They come from `answers.yaml` or the user. Widen `SENSITIVE` freely, but never narrow it to make a test pass.
 - **No CAPTCHA solving, bot-detection evasion, or scraping of sites whose terms forbid it.** Blocked applications go to the user's queue.
-- **`submitted` means the site confirmed it.** Anything less is `unconfirmed`.
+- **`submitted` means the site confirmed it.** Anything less is `unconfirmed`. For an email application, it means the SMTP server accepted the message.
+- **Email goes only where the posting says.** Applications are emailed only to an address that appears in the posting text (`applyByEmailAddress` in `src/email.ts`). Inbox sync downloads only bodies whose headers point at an application and stores metadata for matched messages only, never bodies. Tests use a fake `Mailbox`; never send real mail from a test.
+- **Statistics decide, the model proposes.** Verdicts on tracks (`trackStats` in `src/strategy.ts`) are computed against the cited benchmarks in `src/benchmarks.ts`. The strategist cannot retire or cement against them (`applyReview`). Change a benchmark only with a cited source.
 - **Personal data stays out of the repo.** The workspace is `~/.resumetron`. Tests and examples use the fictional pool in `examples/`.
 
 ## Working here

@@ -19,7 +19,15 @@ export function mockLlm(pool: Pool): Llm & { calls: LlmRequest[] } {
       const reply = (() => {
         switch (req.purpose) {
           case "screen":
-            return { fit: 88, dealbreaker: false, reason: "policy research role matching the internship" };
+            return { fit: 88, dealbreaker: false, reason: "policy research role matching the internship", track: 1 };
+          case "strategy":
+            return {
+              memo: "Two bets to start.",
+              tracks: [
+                { name: "Local policy analysis", hypothesis: "Municipal internship makes them credible for city and county policy roles.", roles: ["Policy Analyst"], queries: [], employers: [] },
+                { name: "Community programs", hypothesis: "Listening sessions and debate coaching fit program coordination.", roles: ["Program Coordinator"], queries: [], employers: [] },
+              ],
+            };
           case "tailor": {
             const plan = identityPlan(pool);
             plan.sections.reverse();

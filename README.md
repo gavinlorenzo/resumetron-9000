@@ -133,12 +133,43 @@ Sources are official public APIs only:
 
 For on-site and hybrid roles, add Adzuna or USAJOBS (`sources:` in the config). Without them, keyword search covers remote roles only, and on-site roles come from company boards. LinkedIn, Indeed, and similar sites aren't supported: their terms forbid automated applying, and accounts that do it get banned.
 
+## Strategy: hypotheses, judged against real numbers
+
+The job market is slow and noisy, and a model left to read its own results tends to panic early. So the Resumetron runs its search as a set of hypotheses and uses statistics, not the model's impression, to decide when one is working or failing.
+
+- **Tracks.** On the first run, the strategist turns your background and goal into a few *tracks*. Each is a bet such as "entry-level legislative staff roles, because of X and Y in your background", and each comes with its own searches and employers. A focused goal gets one or two tracks; a broad goal gets three to five different ones. Screening assigns every job to a track.
+- **Quota follows evidence.** Each run's slots are split across tracks by Thompson sampling on their interview rates. Better tracks get more, every active track keeps a floor, and newly proposed tracks share a 10% exploration slice until you approve them (`resumetron track approve <id>`).
+- **Weekly review.** Once a week, the strategist reads each track's numbers, its screening results and its replies. It writes a memo (`resumetron strategy`, saved under `strategy/`), sharpens hypotheses, adds searches and employers, and proposes new tracks. `resumetron review` runs one now.
+- **The statistics decide.** The strategist can always refine a track. It can retire one only when the data says "underperforming", and cement one only when the data says "outperforming"; anything else is declined and logged in the memo.
+
+The benchmarks are published hiring data: about 3% of applications become interviews (CareerPlug, 10M+ applications), about 5.8% with a tailored resume (Huntr, 1.7M tracked applications), and half of interviews arrive more than ~23 days after applying. From that:
+
+| Verdict | When |
+|---|---|
+| too early | fewer than ~30 applications have had time to be answered |
+| underperforming | very likely (90%) converting below 1%; with no interviews, this takes 200+ mature applications |
+| outperforming | very likely (80%) beating the benchmark, with at least 2 interviews |
+| inconclusive | everything else, which is most of the time |
+
+An unanswered application counts as a "no" only in proportion to how long it has had: a one-week-old application counts for about a fifth. At a 3% rate, zero interviews from 40 applications happens about 30% of the time, and the memo says so instead of calling it a failure.
+
+## Email: replies and applying by email
+
+Add an `email:` section to the config with an app password in an environment variable. A Gmail app password requires 2-Step Verification: Google Account → Security → App passwords. Then check the login with `resumetron email test`, which sends nothing.
+
+- **Outcomes from replies.** Each run reads new mail. It matches replies to applications by thread for emails it sent, otherwise by company name in a hiring context. It downloads message bodies only when the sender or subject points to one of your applications. Each reply is classified as acknowledged, rejected, interview, or offer, using wording rules first and a short model call when the wording is ambiguous. Only a one-line record of each matched message is kept (date, sender domain, subject, outcome), never the body, and unrelated mail leaves no trace. `resumetron email sync` reads replies now.
+- **Applying by email.** When a posting says to email an application to an address that appears in the posting itself, the tool sends the cover letter as the body, with the resume and cover letter PDFs attached. In review mode it drafts `email.txt` in the packet. Postings with their own subject-line or reference-number rules go to your queue.
+- **Manual outcomes.** For replies that came another way (a phone call, LinkedIn): `resumetron outcome <id> interview`.
+
+Outcomes only move forward (an interview never becomes a rejection), and silence is never recorded: it's read from the application's age.
+
 ## Storage stays bounded
 
 Everything the tool keeps has a limit, so a cron job can run for months on a small VPS without filling the disk or slowing down. Defaults, all adjustable under `retention:`:
 
 - Finished jobs shrink to a small dedupe record (the posting text is dropped). Rejected and skipped records are deleted after 180 days. Records of applications you sent are kept.
 - The waiting backlog holds at most 400 jobs; the lowest-scored drop off first.
+- Email records are one line per matched reply, capped at 3,000 and dropped after 400 days. Strategy memos keep the last 12.
 - The journal keeps 300 entries. Covered searches, board lookups, and token usage (one row per day) are capped or expire.
 - Screenshots go after 14 days. Packets for skipped, failed, and preview applications go after 30 days. PDFs of sent applications stay.
 - Each run logs to one file per day, kept for 14 days. The database hands freed space back after every cleanup.
@@ -148,7 +179,7 @@ Cleanup runs after every `run`. `resumetron prune` runs it by hand, and `resumet
 
 ## Commands
 
-`init` `import` `interview` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `searches` `search` `exclude` `journal` `status` `prune` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
+`init` `import` `interview` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `searches` `search` `exclude` `strategy` `track approve|retire` `review` `outcome` `email test|sync` `journal` `status` `prune` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
 
 ## Use it responsibly
 

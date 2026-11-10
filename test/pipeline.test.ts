@@ -8,6 +8,7 @@ import { Config } from "../src/config.ts";
 import { Ledger } from "../src/ledger.ts";
 import { metered } from "../src/llm/index.ts";
 import { type Ctx, run } from "../src/pipeline.ts";
+import type { InboundMessage, OutboundMessage } from "../src/email.ts";
 import { Goal, type Job } from "../src/schema.ts";
 import { workspaceAt } from "../src/workspace.ts";
 import { type FakeBoard, examplePool, fakeBoard, mockLlm } from "./helpers.ts";
@@ -143,6 +144,41 @@ test("review mode prepares and pre-fills but never submits", async () => {
   assert.equal(board.submissions.length, before);
   const ready = ledger.byStatus("ready")[0];
   assert.ok(existsSync(join(ready.packet_dir!, "form-filled.png")));
+  ledger.close();
+});
+
+test("email-only postings are applied to by email, and replies come back as outcomes on the right track", async () => {
+  const { ctx, ledger } = makeCtx({ submit: "auto", maxPerRun: 5 });
+  const sent: OutboundMessage[] = [];
+  const inbox: InboundMessage[] = [];
+  ctx.cfg.email = { provider: "custom", address: "jordan@example.com", passwordEnv: "X", send: true, maxPerSync: 50 };
+  ctx.mailbox = {
+    fetchHeaders: async (after) => inbox.filter((m) => m.uid > after).map((m) => ({ ...m, text: "" })),
+    fetchText: async (uids) => new Map(inbox.filter((m) => uids.includes(m.uid)).map((m) => [m.uid, m.text])),
+    send: async (m) => (sent.push(m), "<app-1@example.com>"),
+    verify: async () => {},
+  };
+  const emailJob = job(9, "Policy Analyst", {
+    company: "Town of Example",
+    autoApplicable: false,
+    description: "Research local government policy and write briefing memos. To apply, send your resume and cover letter to hiring@town.example.gov.",
+  });
+  ctx.sources!.sweep = async () => [emailJob];
+
+  await run(ctx);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "hiring@town.example.gov");
+  assert.deepEqual(sent[0].attachments.map((a) => a.split(/[\\/]/).pop()), ["Jordan_Rivera_Resume.pdf", "Jordan_Rivera_Cover_Letter.pdf"]);
+  assert.match(sent[0].text, /Town of Example/);
+  const row = ledger.get("job9")!;
+  assert.equal(row.status, "submitted");
+  assert.equal(row.channel, "email");
+  assert.equal(row.track_id, 1, "screening placed it on a strategy track");
+  assert.equal(ledger.tracks().length, 2, "the opening hypotheses were created on the first run");
+
+  inbox.push({ uid: 1, messageId: "<r1>", inReplyTo: ["<app-1@example.com>"], from: "clerk@town.example.gov", subject: "Re: Application", date: "", text: "Thanks Jordan, can we schedule an interview next week? Please send your availability." });
+  await run(ctx);
+  assert.equal(ledger.get("job9")!.outcome, "interview");
   ledger.close();
 });
 

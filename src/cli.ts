@@ -4,7 +4,10 @@ import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { BrowserHost } from "./browser.ts";
-import { type ExclusionKind, Ledger } from "./ledger.ts";
+import { type ExclusionKind, Ledger, type Outcome } from "./ledger.ts";
+import { SOURCES } from "./benchmarks.ts";
+import { liveMailbox, syncInbox } from "./email.ts";
+import { allocate, latestMemo, maybeReview, trackStats } from "./strategy.ts";
 import { acquireRunLock, dirSize, formatBytes, prune } from "./retention.ts";
 import { createLlm, metered } from "./llm/index.ts";
 import { importPool, interview, readSource } from "./onboard.ts";
@@ -51,6 +54,13 @@ async function withCtx<T>(fn: (ctx: Ctx) => Promise<T>, opts: { needGoal?: boole
       browser,
       log,
     };
+    if (cfg.email) {
+      try {
+        ctx.mailbox = liveMailbox(cfg.email);
+      } catch (e) {
+        log(`email disabled: ${errorMessage(e)}`);
+      }
+    }
     return await fn(ctx);
   } finally {
     await browser.close();
@@ -312,6 +322,113 @@ program
       }
       ledger.addExclusion(kind as ExclusionKind, pattern, "user", "added by you");
       log(`Excluded ${kind} "${pattern}".`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("strategy")
+  .description("the current hypotheses (tracks), how each is doing against published benchmarks, and the latest memo")
+  .action(() => {
+    const w = ws();
+    const cfg = loadConfig(w);
+    const ledger = new Ledger(w.ledger);
+    try {
+      const stats = trackStats(ledger, cfg.mode);
+      const shares = allocate(stats, cfg.strategy);
+      if (!stats.length) return log("No tracks yet: the first run proposes them.");
+      for (const s of stats) {
+        const share = shares.get(s.track.id);
+        log(`\n${String(s.track.id).padStart(3)}  ${s.track.name}  [${s.track.status}]${share != null ? `  ${Math.round(share * 100)}% of quota` : ""}`);
+        log(`     ${s.track.hypothesis}`);
+        if (s.track.status !== "retired") {
+          log(`     ${s.sent} sent, ${s.interviews} interviews, ${s.rejections} rejections; verdict: ${s.verdict.replace("_", " ")}` +
+            (s.sent ? ` (zero interviews by now would happen ${Math.round(s.pZeroAtBaseline * 100)}% of the time at the benchmark rate)` : ""));
+        }
+      }
+      const memo = latestMemo(w.root);
+      if (memo) log(`\n${"-".repeat(60)}\n${memo}`);
+      log(`Benchmarks: ${SOURCES.map((s) => s.url).join(" ")}`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("track")
+  .description("approve a proposed track, or retire any track")
+  .argument("<action>", "approve | retire")
+  .argument("<id>")
+  .action((action: string, id: string) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      const t = ledger.tracks().find((x) => x.id === Number(id));
+      if (!t) throw new Error(`no track ${id}`);
+      if (action === "approve") ledger.updateTrack(t.id, { status: "active" });
+      else if (action === "retire") {
+        ledger.updateTrack(t.id, { status: "retired", note: "retired by you" });
+        for (const q of ledger.queries("active").filter((q) => q.track_id === t.id)) ledger.retireQuery(q.id);
+      } else throw new Error("action is approve or retire");
+      ledger.note("strategy", `${action}d track "${t.name}" (by you)`);
+      log(`${action === "approve" ? "Approved" : "Retired"} "${t.name}".`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("review")
+  .description("run the strategy review now instead of waiting for the weekly one")
+  .action(async () =>
+    withCtx(async (ctx) => {
+      const memo = await maybeReview({ cfg: ctx.cfg, goal: ctx.goal, pool: ctx.pool, ledger: ctx.ledger, llm: ctx.llm, root: ctx.ws.root, log }, true);
+      log(memo ? readFileSync(memo, "utf8") : "No review written.");
+    }),
+  );
+
+program
+  .command("outcome")
+  .description("record what an employer did, when it didn't come by email (acknowledged | rejected | interview | offer)")
+  .argument("<id>")
+  .argument("<outcome>")
+  .action((id: string, outcome: string) => {
+    if (!["acknowledged", "rejected", "interview", "offer"].includes(outcome)) throw new Error("outcome is acknowledged, rejected, interview, or offer");
+    const ledger = new Ledger(ws().ledger);
+    try {
+      const row = ledger.get(id);
+      if (!row) throw new Error(`no job ${id}`);
+      if (!["submitted", "unconfirmed"].includes(row.status)) ledger.setStatus(row.id, "submitted", { reason: "submitted (recorded by you)" });
+      const changed = ledger.setOutcome(row.id, outcome as Outcome);
+      ledger.note("outcome", `${row.company} | ${row.title}: ${outcome} (recorded by you)`);
+      log(changed ? `Recorded: ${row.company} | ${row.title}: ${outcome}` : `Kept the existing outcome (${row.outcome}); outcomes only move forward.`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+const mail = program.command("email").description("employer replies and email applications");
+mail
+  .command("test")
+  .description("check the IMAP and SMTP login without sending anything")
+  .action(async () => {
+    const cfg = loadConfig(ws());
+    if (!cfg.email) throw new Error("no email section in config.yaml");
+    await liveMailbox(cfg.email).verify();
+    log("IMAP and SMTP login both work.");
+  });
+mail
+  .command("sync")
+  .description("read new replies now and update outcomes")
+  .action(async () => {
+    const w = ws();
+    const cfg = loadConfig(w);
+    if (!cfg.email) throw new Error("no email section in config.yaml");
+    const ledger = new Ledger(w.ledger);
+    try {
+      const r = await syncInbox(liveMailbox(cfg.email), ledger, { llm: llmFor(w, ledger), limit: cfg.email.maxPerSync, log });
+      log(`Read ${r.read} new message(s); ${r.matched} about your applications.${r.outcomes.length ? `\n${r.outcomes.join("\n")}` : ""}`);
+      for (const e of ledger.recentEmails(10)) log(`  ${e.at.slice(0, 10)} ${e.kind.padEnd(12)} ${e.from_domain.padEnd(24)} ${e.subject.slice(0, 60)}`);
     } finally {
       ledger.close();
     }
