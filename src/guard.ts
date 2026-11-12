@@ -147,7 +147,8 @@ export function namesIn(text: string): Set<string> {
 
 /** Tools and credentials in the text (a subset of names): claims about what someone can do. */
 export function toolsIn(text: string): Set<string> {
-  return new Set([...namesIn(text)].filter((n) => TOOLS.has(n) || /[+#]|\w\.\w/.test(n)));
+  // Off-lexicon names that look like tools: "c++", "f#", "node.js". Not "e.g", "i.e", or "+1".
+  return new Set([...namesIn(text)].filter((n) => TOOLS.has(n) || /^[a-z][a-z0-9]*(\+\+|#)$|^[a-z]{2,}\.[a-z]{2,}$/i.test(n)));
 }
 
 const STOP = new Set(

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import YAML from "yaml";
-import { checkBullet, checkProse } from "../src/guard.ts";
+import { checkBullet, checkProse, toolsIn } from "../src/guard.ts";
 import { compose, identityPlan, trimOnce } from "../src/resume/compose.ts";
 import { Pool } from "../src/schema.ts";
 
@@ -105,4 +105,10 @@ test("posting numbers and tools can't become the candidate's", () => {
   assert.equal(checkProse("You ask for 5+ years of experience, and I bring 8 cities of research instead.", own, posting).length, 0, "restating the posting is fine");
   assert.equal(checkProse("I have used Salesforce daily.", own, posting).length, 1, "a tool only the posting names is not the candidate's");
   assert.equal(checkProse("Your team works in Salesforce.", own, posting).length, 0, "naming the posting's tool is fine");
+});
+
+test("abbreviations and phone codes aren't tools", () => {
+  const t = [...toolsIn("Strong skills, e.g. SQL or Excel, i.e. data. Call +1 555. Use C++, C# and Node.js.")];
+  for (const junk of ["e.g", "i.e", "+1"]) assert.ok(!t.includes(junk), junk);
+  for (const real of ["sql", "c++", "c#", "node.js"]) assert.ok(t.includes(real), real);
 });
