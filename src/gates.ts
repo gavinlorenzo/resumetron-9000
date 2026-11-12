@@ -93,7 +93,11 @@ export function checkGates(job: Pick<Job, "title" | "description">, el: Eligibil
     hits.push({ hit: { gate: "clearance", quote: clearance, detail: obtainable ? "must be able to obtain a security clearance" : "requires an active security clearance" }, conflict });
   }
 
-  const years = cls.map((c) => ({ c, m: c.match(YEARS) })).find((x) => x.m && REQUIRED.test(x.c) && !SOFT.test(x.c) && !EEO.test(x.c));
+  const yearClauses = cls.map((c) => ({ c, m: c.match(YEARS) })).filter((x) => x.m && REQUIRED.test(x.c) && !SOFT.test(x.c) && !EEO.test(x.c));
+  // Labor-certification postings list alternative paths ("a Master's and 3 years, or in the
+  // alternative a Bachelor's and 5"); the easiest path is the real minimum.
+  const alternatives = /\bin the alternative\b|\balternatively\b/i.test(job.description);
+  const years = alternatives ? yearClauses.sort((a, b) => Number(a.m![1]) - Number(b.m![1]))[0] : yearClauses[0];
   if (years?.m) {
     const need = Number(years.m[1]);
     // Postings overstate years; two short is still worth a try, three short isn't.

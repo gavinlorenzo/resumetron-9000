@@ -34,9 +34,15 @@ export async function fillForm(page: Page, resolutions: Resolution[]): Promise<s
           const value = String(r.value);
           await loc.click();
           // Typing filters the menu; a few characters keep option text intact for matching.
-          await loc.pressSequentially(value.slice(0, 24), { delay: 15 }).catch(() => {});
-          await page.waitForTimeout(400);
-          if (!(await comboOptions(page, f.rtId).pick(value))) await page.keyboard.press("Enter");
+          await loc.pressSequentially(value.replace(/^the\s+/i, "").replace(/,.*$/, "").slice(0, 24), { delay: 15 }).catch(() => {});
+          await page.waitForTimeout(700);
+          // Only an option that matches the answer is ever chosen; never "whatever is first".
+          const shown = (await comboOptions(page, f.rtId).allInnerTexts()).map((t) => t.trim()).filter(Boolean);
+          const pick = matchOption(value, shown);
+          if (!pick || !(await comboOptions(page, f.rtId).pick(pick))) {
+            await page.keyboard.press("Escape").catch(() => {});
+            throw new Error("no matching option");
+          }
           break;
         }
         case "prompt":

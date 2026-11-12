@@ -84,10 +84,14 @@ const LOOKALIKE = /\b(?=[\wЀ-ӿͰ-Ͽ]*[a-z])(?=[\wЀ-ӿͰ-Ͽ]*[аеорсухі
 const INSTRUCTION = [
   /\b(ignore|disregard|forget)\b.{0,30}\b(previous|prior|above|earlier|all|any)\b.{0,20}\b(instructions?|prompts?|rules|directions)\b/i,
   /\b(if|when) you are (an? )?(ai|a\.i\.|llm|large language model|language model|chatbot|bot|assistant|automated|gpt|chatgpt|claude)\b/i,
-  /\b(you are|act as|pretend to be|you're) (an? )?(ai|llm|language model|assistant|chatgpt|claude|gpt)\b/i,
-  /\b(ai|llm|language model|chatgpt|claude|gpt|automated (tool|system)s?)\b.{0,60}\b(must|should|need to|are required to|include|mention|write|respond|add)\b/i,
+  /\b(act as|pretend (to be|you are)|you are now) (an? )?(ai|llm|language model|assistant|chatgpt|claude|gpt)\b(?![\w-])/i,
+  // "You are an AI model reading this" is addressed to software; "you are an AI architect" is a job ad.
+  /\byou(?: are|'re) (an? )?(ai|llm|large language model|language model|chatbot)( model| assistant)?\s*(,|\.|$|reading|reviewing|processing|that|who|and)/i,
+  /\bif (the|a|your) (user|candidate|human|applicant) asks you\b/i,
+  /\b(ai|llm|language model|chatgpt|claude|gpt)s?( (assistants?|agents?|models?|tools?|systems?|applicants?))? (must|should|shall|need to|are required to) (include|mention|write|respond|reply|add|say|answer|state|insert|output|use the)\b/i,
   /\b(include|mention|use|insert|add)\b.{0,30}\b(the (word|phrase|code|keyword)|the following (word|phrase))\b/i,
-  /\b(system|developer) (prompt|message|instructions?)\b/i,
+  // A role building AI agents mentions system prompts; an injection *gives* one.
+  /^\W*(system|developer) (prompt|message|instructions?)\s*:|\b(new|override|overriding|updated|replace the) (system|developer) (prompt|message|instructions?)\b/i,
   /<\|?(im_start|im_end|system|endoftext)\|?>|\[\/?(inst|system)\]|###\s*(instruction|system)/i,
   /\b(respond|reply|answer) (only )?with\b.{0,40}\b(yes|true|approved|the word)\b/i,
 ];

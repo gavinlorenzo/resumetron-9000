@@ -89,9 +89,20 @@ async function ashby(board: string, name?: string): Promise<Job[]> {
         applyUrl: j.applyUrl ?? `${j.jobUrl}/application`,
         ...(j.descriptionHtml ? { html: j.descriptionHtml } : { description: j.descriptionPlain ?? "" }),
         postedAt: j.publishedAt,
+        ...salaryRange(j.compensation?.scrapeableCompensationSalarySummary ?? j.compensation?.compensationTierSummary),
         autoApplicable: true,
       }),
     );
+}
+
+/** "$207K - $285K" or "$95,000 – $120,000" -> annual USD bounds. Anything else is left unknown. */
+export function salaryRange(summary?: string): { salaryMin?: number; salaryMax?: number } {
+  const m = summary?.match(/\$\s?([\d.,]+)\s?([kK])?\s*(?:-|–|to)\s*\$?\s?([\d.,]+)\s?([kK])?/);
+  if (!m) return {};
+  const n = (v: string, k?: string) => Number(v.replace(/,/g, "")) * (k ? 1000 : 1);
+  const lo = n(m[1], m[2] ?? m[4]);
+  const hi = n(m[3], m[4]);
+  return lo >= 10_000 && hi >= lo ? { salaryMin: lo, salaryMax: hi } : {};
 }
 
 // The boards below list jobs whose forms Resumetron doesn't fill on its own yet: packets are

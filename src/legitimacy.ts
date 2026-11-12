@@ -19,11 +19,16 @@ const quote = (text: string, re: RegExp): string | null => {
   return `"${text.slice(start, m.index! + m[0].length + 40).replace(/\s+/g, " ").trim()}"`;
 };
 
+const NEGATED = /\b(never|not|no|nor|won'?t|will not|does ?n[o']?t|do not|don'?t|without|neither|beware|scams?|fraud\w*)\b/i;
+/** The part of the match's sentence that comes before it. */
+const sentenceBefore = (text: string, at: number) => text.slice(Math.max(0, at - 200), at).split(/[.!?\n]/).pop() ?? "";
+
 const SCAM: [RegExp, string][] = [
   [/\b(pay|purchase|buy|cover the cost of)\b[^.]{0,40}\b(training|starter kit|registration|certification|background check|equipment|software license|uniform)\b(?![^.]{0,40}\b(reimburs|provided|covered|paid for by))/i, "asks you to pay for something to start"],
   [/\b(application|registration|processing|onboarding|placement) fee\b/i, "charges an application or placement fee"],
   [/\b(deposit|cash)\b[^.]{0,40}\b(check|cheque)\b|\b(check|cheque)\b[^.]{0,60}\b(wire|gift cards?|(buy|purchase) (supplies|equipment)|send (back|the (rest|remainder)))\b/i, "involves depositing checks: a common fake-job scam"],
-  [/\b(gift cards?|wire transfer|western union|moneygram|cryptocurrency|bitcoin)\b/i, "mentions gift cards, wire transfers, or crypto"],
+  // Moving money is the scam; a fintech job that mentions gift cards or crypto as products is not.
+  [/\b(pay|send|buy|purchase|reimburs\w*|deposit)\b[^.]{0,30}\b(gift cards?|via wire|by wire|wire transfers?|western union|moneygram|bitcoin|crypto(currency)?)\b|\b(gift cards?|bitcoin|western union|moneygram)\b[^.]{0,30}\b(to (us|the company|your (manager|supervisor))|as payment|for (supplies|equipment))\b/i, "asks you to move money by gift card, wire, or crypto"],
   [/\b(reship(ping)?|package (forwarding|inspection)|receive packages at (your|their) home)\b/i, "package reshipping: a common fake-job scam"],
 ];
 
@@ -48,6 +53,7 @@ const PAY = /[$€£]\s?\d|\b\d{2,3},?\d{3}\s?(-|–|to)\s?\$?\d|\b(salary|pay|c
 /** Whether the job's location is somewhere that requires posting a pay range. */
 export function payTransparencyPlace(location: string): string | null {
   const loc = ` ${location.toLowerCase().replace(/[^a-z]+/g, " ")} `;
+  if (/ washington d c /.test(loc) || / washington dc /.test(loc)) return "district of columbia";
   for (const [name, abbr] of PAY_TRANSPARENCY) {
     if (loc.includes(` ${name} `)) return name;
     // Two-letter codes only after a comma ("Seattle, WA"), so "in" or "or" never count.
@@ -62,8 +68,10 @@ export function postingSignals(job: Job, reposts = 0): Signals {
   const severe: string[] = [];
   const warn: string[] = [];
   for (const [re, why] of SCAM) {
-    const q = quote(text, re);
-    if (q) severe.push(`${why}: ${q}`);
+    const m = text.match(re);
+    // "We never charge application fees" is an anti-scam notice, not a scam.
+    if (!m || NEGATED.test(sentenceBefore(text, m.index!))) continue;
+    severe.push(`${why}: ${quote(text, re)}`);
   }
   for (const [re, why] of WARN) {
     const q = quote(text, re);
@@ -71,7 +79,7 @@ export function postingSignals(job: Job, reposts = 0): Signals {
   }
   const place = payTransparencyPlace(job.location);
   if (place && job.salaryMin === undefined && job.salaryMax === undefined && !PAY.test(job.description) && job.description.length > 400) {
-    warn.push(`no pay range, though ${place} requires one in job postings`);
+    warn.push(`no pay range in this listing, though ${place} requires one (it may be on the employer's own careers page)`);
   }
   if (reposts >= 2) warn.push(`reposted ${reposts} times: possibly a ghost job or a role that's hard to fill`);
   if (job.description.length < 300 && !["adzuna", "preview"].includes(job.source)) warn.push("very short posting with few details");

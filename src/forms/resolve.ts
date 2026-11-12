@@ -56,6 +56,14 @@ const IDENTITY: [RegExp, (p: Pool) => string | undefined][] = [
   [/linkedin/i, (p) => p.contact.links.find((l) => /linkedin/i.test(l))],
   [/github/i, (p) => p.contact.links.find((l) => /github/i.test(l))],
   [/portfolio|website|personal site|other link/i, (p) => p.contact.links.find((l) => !/linkedin/i.test(l))],
+  [/^legal name\b/i, (p) => p.contact.name],
+  // Facts your pool states outright: the most recent role (pools list newest first) and school.
+  [/(current|most recent) (or (previous|most recent|last) )?(job )?title|(current|previous) job title/i, (p) => latest(p, true)?.title],
+  [/(current or (previous|most recent|last)|most recent|previous) (employer|company)/i, (p) => latest(p, true)?.org],
+  [/current (employer|company)/i, (p) => latest(p, false)?.org],
+  [/^(school|university|college)( name)?$|^(name of )?(school|university|college) (attended|name)/i, (p) => school(p)?.school],
+  [/^degree$|highest (level of )?(degree|education)/i, (p) => degreeLevel(school(p)?.degree)],
+  [/what city and state|city and state|city, state/i, (p) => [p.contact.city, p.contact.state].filter(Boolean).join(", ") || undefined],
   [/^city\b/i, (p) => p.contact.city],
   [/^(current )?location\b|where are you (located|based)/i, (p) => [p.contact.city, p.contact.state].filter(Boolean).join(", ") || undefined],
   // Split address forms: line 1 is the street; line 2 (apartment, suite) only if your address has one.
@@ -64,8 +72,42 @@ const IDENTITY: [RegExp, (p: Pool) => string | undefined][] = [
   [/address/i, (p) => p.contact.address],
   [/^state|province/i, (p) => fullState(p.contact.state)],
   [/zip|postal/i, (p) => p.contact.zip],
-  [/^country|country (are you|do you live|of residence)|which country/i, (p) => p.contact.country],
+  [/^country|country (are you|do you live|of residence|where you (currently )?(reside|live))|which country/i, (p) => p.contact.country],
 ];
+
+/**
+ * Your most recent role and its organization. With `orPast` false it counts only a role you're
+ * still in ("Present"), so "current company" is never answered with a job you've left.
+ */
+function latest(p: Pool, orPast: boolean): { org: string; title: string } | undefined {
+  for (const s of p.sections) {
+    if (s.type !== "experience") continue;
+    const e = s.entries[0];
+    const r = e?.roles[0];
+    if (!e || !r) continue;
+    if (!orPast && !/present|current|now/i.test(r.dates)) return undefined;
+    return { org: e.org, title: r.title };
+  }
+  return undefined;
+}
+
+/** "Honors Bachelor of Arts" -> "Bachelor's Degree", the way degree dropdowns name levels. */
+export function degreeLevel(degree?: string): string | undefined {
+  if (!degree) return undefined;
+  const d = degree.toLowerCase().replace(/\./g, "");
+  if (/\bph\.?\s?d\b|doctor of philosophy|doctorate/.test(d)) return "Doctor of Philosophy (Ph.D.)";
+  if (/\bm\.?b\.?a\b|business administration/.test(d) && /master|m\.?b\.?a/.test(d)) return "Master of Business Administration (M.B.A.)";
+  if (/\bj\.?d\b|juris doctor/.test(d)) return "Juris Doctor (J.D.)";
+  if (/master|\bm\.?(a|s|sc|eng|pp|pa)\b\.?/.test(d)) return "Master's Degree";
+  if (/bachelor|\bb\.?(a|s|sc|eng|fa)\b\.?/.test(d)) return "Bachelor's Degree";
+  if (/associate|\ba\.?(a|s)\b\.?/.test(d)) return "Associate's Degree";
+  return degree;
+}
+
+const school = (p: Pool) => {
+  for (const s of p.sections) if (s.type === "education" && s.entries[0]) return s.entries[0];
+  return undefined;
+};
 
 /**
  * "7440 Main St, Apt 2, Springfield, IL 62704" -> street and (if present) the unit. A full
@@ -90,8 +132,21 @@ const STATES: Record<string, string> = {
 /** US state codes as dropdowns spell them: "GA" -> "Georgia". */
 export const fullState = (s?: string) => (s ? (STATES[s.trim().toUpperCase()] ?? s) : undefined);
 
-/** Picks the option matching an answer: exact, then prefix, then a unique whole-word containment. */
+/**
+ * Picks the option matching an answer: exact, then prefix, then a unique whole-word containment.
+ * Also tries the answer without a leading "The" and with a state code spelled out
+ * ("Cumming, GA" -> "Cumming, Georgia"), since option lists name things in full.
+ */
 export function matchOption(answer: string, options: string[]): string | undefined {
+  const variants = [answer, answer.replace(/^the\s+/i, ""), answer.replace(/,\s*([A-Za-z]{2})\b/, (m, code: string) => (STATES[code.toUpperCase()] ? `, ${STATES[code.toUpperCase()]}` : m))];
+  for (const v of [...new Set(variants)]) {
+    const hit = matchOne(v, options);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function matchOne(answer: string, options: string[]): string | undefined {
   const a = normalize(answer);
   if (!a) return undefined;
   const exact = options.find((o) => normalize(o) === a);
@@ -120,6 +175,11 @@ function settle(field: FormField, answer: string | string[], source: AnswerSourc
   if (isChoice(field)) {
     const answers = Array.isArray(answer) ? answer : [answer];
     const picked = answers.map((a) => matchOption(a, field.options));
+    // A long searchable list (schools, cities) shows only its first options until you type.
+    // The answer is typed and only a matching option chosen; no match leaves it for you.
+    if (picked.some((p) => !p) && field.kind === "combobox" && field.options.length >= 25 && answers.length === 1) {
+      return { field, status: "fill", value: answers[0], source };
+    }
     if (picked.some((p) => !p)) {
       return { field, status: "needs_human", reason: `answer "${answers.join(", ")}" matches none of: ${field.options.join(" / ")}` };
     }
