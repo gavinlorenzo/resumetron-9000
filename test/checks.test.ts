@@ -1,0 +1,127 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
+import { checkGates } from "../src/gates.ts";
+import { postingSignals, payTransparencyPlace } from "../src/legitimacy.ts";
+import { CLOSED_TEXT } from "../src/liveness.ts";
+import { Ledger } from "../src/ledger.ts";
+import { fitFrom } from "../src/match.ts";
+import { Eligibility, type Job } from "../src/schema.ts";
+import { canonicalUrl } from "../src/util.ts";
+
+const dirs: string[] = [];
+const ledgers: Ledger[] = [];
+after(() => {
+  for (const l of ledgers) l.close();
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
+
+const el = (o: Partial<Eligibility> = {}) => Eligibility.parse(o);
+const posting = (description: string) => ({ title: "Analyst", description });
+
+test("gates reject only on a clear conflict, and quote the posting", () => {
+  const noSponsor = posting("Great team. We are unable to sponsor employment visas at this time. Apply today.");
+  assert.equal(checkGates(noSponsor, el({ needsSponsorship: true })).reject?.gate, "sponsorship");
+  assert.match(checkGates(noSponsor, el({ needsSponsorship: true })).reject!.quote, /unable to sponsor/);
+  assert.equal(checkGates(noSponsor, el({ needsSponsorship: false })).reject, null);
+  assert.equal(checkGates(noSponsor, el()).unknown[0].gate, "sponsorship", "unknown eligibility is noted, not rejected");
+
+  const citizen = posting("Applicants must be a U.S. citizen due to contract requirements.");
+  assert.equal(checkGates(citizen, el({ usCitizen: false })).reject?.gate, "citizenship");
+  assert.equal(checkGates(citizen, el({ usCitizen: true })).reject, null);
+  assert.equal(checkGates(posting("U.S. citizenship is not required for this role."), el({ usCitizen: false })).reject, null, "negated");
+  assert.equal(
+    checkGates(posting("All qualified applicants will receive consideration without regard to race, citizenship, or national origin."), el({ usCitizen: false })).reject,
+    null,
+    "EEO boilerplate",
+  );
+});
+
+test("clearance, years, degree and language gates", () => {
+  const ts = posting("Must possess an active TS/SCI clearance.");
+  assert.equal(checkGates(ts, el({ clearance: "eligible" })).reject?.gate, "clearance");
+  assert.equal(checkGates(ts, el({ clearance: "active" })).reject, null);
+  const obtain = posting("Must be able to obtain a Secret security clearance.");
+  assert.equal(checkGates(obtain, el({ clearance: "eligible" })).reject, null);
+  assert.equal(checkGates(posting("Clearance not required, but TS/SCI clearance preferred."), el({ clearance: "none" })).reject, null, "preferred, in its own clause");
+
+  const years = posting("Requires a minimum of 7 years of experience in policy analysis.");
+  assert.equal(checkGates(years, el({ yearsExperience: 1 })).reject?.gate, "years");
+  assert.equal(checkGates(years, el({ yearsExperience: 5 })).reject, null, "two short is close enough to try");
+  assert.equal(checkGates(posting("5+ years of experience preferred."), el({ yearsExperience: 0 })).reject, null, "preferred is not required");
+
+  const masters = posting("A Master's degree in public policy is required.");
+  assert.equal(checkGates(masters, el({ degree: "bachelor" })).reject?.gate, "degree");
+  assert.equal(checkGates(posting("Master's degree required, or equivalent experience."), el({ degree: "bachelor" })).reject, null);
+  assert.equal(checkGates(posting("Bachelor's degree required. Proficiency in MS Excel."), el({ degree: "bachelor" })).reject, null, "MS Excel is not a master's");
+
+  const spanish = posting("Fluency in Spanish is required to serve our clients.");
+  assert.equal(checkGates(spanish, el({ languages: ["French"] })).reject?.gate, "language");
+  assert.equal(checkGates(spanish, el({ languages: ["Spanish"] })).reject, null);
+  assert.equal(checkGates(spanish, el()).reject, null);
+});
+
+const job = (description: string, extra: Partial<Job> = {}): Job => ({
+  id: "j", source: "greenhouse", company: "Acme", title: "Coordinator", location: "Remote", remote: true,
+  url: "https://example.com/j", applyUrl: "https://example.com/j", description, autoApplicable: true, ...extra,
+});
+
+test("scam signals and warnings carry their evidence", () => {
+  const long = "x ".repeat(300);
+  assert.match(postingSignals(job(`${long} You will need to purchase a starter kit before training.`)).severe.join(), /pay for something/);
+  assert.match(postingSignals(job(`${long} We will mail you a check to deposit and use to buy supplies.`)).severe.join(), /checks/);
+  assert.deepEqual(postingSignals(job(`${long} Laptop and equipment provided. Training is paid.`)).severe, []);
+  assert.match(postingSignals(job(`${long} We are hiring on behalf of our client, a leading firm.`)).warn.join(), /staffing agency/);
+  assert.match(postingSignals(job(`${long} Send your resume to hiring.team@gmail.com`)).warn.join(), /personal email/);
+  assert.match(postingSignals(job(long, { location: "Seattle, WA" })).warn.join(), /requires one/);
+  assert.doesNotMatch(postingSignals(job(`${long} Salary range: $60,000 - $70,000`, { location: "Seattle, WA" })).warn.join(), /requires one/);
+  assert.match(postingSignals(job(long), 3).warn.join(), /reposted 3 times/);
+  assert.equal(payTransparencyPlace("Columbia, MO"), null, "Columbia is not the District of Columbia");
+  assert.equal(payTransparencyPlace("Austin, TX"), null);
+});
+
+test("posting URLs dedupe however they were linked", () => {
+  assert.equal(canonicalUrl("https://www.acme.com/jobs/123/?utm_source=x&gh_src=y"), canonicalUrl("https://acme.com/jobs/123"));
+  assert.equal(canonicalUrl("https://jobs.lever.co/acme/abc/apply"), canonicalUrl("https://jobs.lever.co/acme/abc"));
+  assert.equal(
+    canonicalUrl("https://acme.wd5.myworkdayjobs.com/en-US/External/job/Austin-TX/Analyst_R-12345?source=LinkedIn"),
+    canonicalUrl("https://acme.wd5.myworkdayjobs.com/External/job/Remote/Analyst_R-12345"),
+  );
+  assert.notEqual(canonicalUrl("https://acme.com/jobs?id=1"), canonicalUrl("https://acme.com/jobs?id=2"), "meaningful parameters stay");
+});
+
+test("the ledger dedupes by URL, counts reposts, and enforces status changes", () => {
+  const root = mkdtempSync(join(tmpdir(), "rt-checks-"));
+  dirs.push(root);
+  const ledger = new Ledger(join(root, "ledger.db"));
+  ledgers.push(ledger);
+  const a = job("d", { id: "a", url: "https://acme.com/jobs/1?utm_source=feed", title: "Analyst" });
+  const b = job("d", { id: "b", url: "https://acme.com/jobs/1", title: "Policy Analyst I" });
+  assert.equal(ledger.addJobs([a], "x").fresh, 1);
+  assert.equal(ledger.addJobs([b], "x").fresh, 0, "same canonical URL");
+  ledger.db.prepare("UPDATE jobs SET discovered_at = ? WHERE id = 'a'").run(new Date(Date.now() - 30 * 86_400_000).toISOString());
+  ledger.addJobs([job("d", { id: "c", url: "https://acme.com/jobs/77", title: "Analyst" })], "x");
+  ledger.addJobs([job("d", { id: "c", url: "https://acme.com/jobs/77", title: "Analyst" })], "x");
+  assert.equal(ledger.get("a")!.reposts, 1, "a new listing for the same job weeks later, counted once");
+
+  assert.throws(() => ledger.setStatus("a", "submitted"), /discovered to submitted/);
+  ledger.setStatus("a", "matched");
+  ledger.setStatus("a", "ready");
+  ledger.setStatus("a", "submitted");
+  assert.throws(() => ledger.setStatus("a", "rejected"), /submitted to rejected/);
+});
+
+test("the fit score is computed from factors and weights", () => {
+  const w = { requirements: 0.35, experience: 0.2, education: 0.1, domain: 0.15, goals: 0.2 };
+  assert.equal(fitFrom({ requirements: 1, experience: 1, education: 1, domain: 1, goals: 1 }, w), 100);
+  assert.equal(fitFrom({ requirements: 0.5, experience: 0.5, education: 0.5, domain: 0.5, goals: 0.5 }, w), 50);
+  assert.equal(fitFrom({ requirements: 1, experience: 0, education: 0, domain: 0, goals: 0 }, { ...w, requirements: 0.7 }), 52, "weights are normalized: 0.7 / 1.35");
+});
+
+test("closed-posting banners are recognized, ordinary pages are not", () => {
+  assert.match("Sorry, this job is no longer accepting applications.", CLOSED_TEXT);
+  assert.match("This position has been filled.", CLOSED_TEXT);
+  assert.doesNotMatch("We are accepting applications on a rolling basis.", CLOSED_TEXT);
+});

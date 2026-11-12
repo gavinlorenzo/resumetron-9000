@@ -56,8 +56,8 @@ test("inbox sync matches replies to applications, reads only likely bodies, and 
   ledgers.push(ledger);
   const job = (id: string, company: string, title: string): Job => ({ id, source: "t", company, title, location: "", remote: false, url: id, applyUrl: id, description: "", autoApplicable: true });
   ledger.addJobs([job("j1", "Civic Labs", "Policy Analyst"), job("j2", "Acme Robotics", "Program Coordinator")], "q:1");
-  ledger.setStatus("j1", "submitted");
-  ledger.setStatus("j2", "submitted");
+  ledger.setStatus("j1", "submitted", { force: true });
+  ledger.setStatus("j2", "submitted", { force: true });
   ledger.setChannel("j2", "email", "<app-j2@me>");
 
   const msgs: InboundMessage[] = [

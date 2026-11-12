@@ -67,12 +67,36 @@ export function pickStandard(job: Job, standards: Standard[], min: number): { st
   return best && best.score >= min ? best : null;
 }
 
-const Screen = z.object({
-  fit: z.number().min(0).max(100),
+const Factor = z.number().min(0).max(1);
+const ScreenReply = z.object({
+  factors: z.object({ requirements: Factor, experience: Factor, education: Factor, domain: Factor, goals: Factor }).optional(),
+  /** Older single-number replies are still accepted. */
+  fit: z.number().min(0).max(100).optional(),
   dealbreaker: z.boolean(),
   reason: z.string(),
+  gaps: z.array(z.string()).default([]),
+  strengths: z.array(z.string()).default([]),
   track: z.number().nullable().optional(),
 });
+
+export type Weights = Config["matching"]["weights"];
+
+/** The fit score, computed here from the model's factor ratings and your weights, never taken from the model whole. */
+export function fitFrom(factors: Record<keyof Weights, number>, w: Weights): number {
+  const total = Object.values(w).reduce((a, b) => a + b, 0) || 1;
+  const sum = (Object.keys(w) as (keyof Weights)[]).reduce((a, k) => a + (factors[k] ?? 0) * w[k], 0);
+  return Math.round((sum / total) * 100);
+}
+
+export interface Screen {
+  fit: number;
+  factors?: Record<string, number>;
+  dealbreaker: boolean;
+  reason: string;
+  gaps: string[];
+  strengths: string[];
+  track?: number | null;
+}
 
 /**
  * One compact model call per job: is it worth applying, given the goal and the candidate
@@ -84,11 +108,13 @@ export async function screenJob(
   goal: Goal,
   candidate: string,
   tracks: { id: number; name: string; hypothesis: string }[] = [],
-): Promise<z.infer<typeof Screen>> {
+  opts: { weights?: Weights; notes?: string[] } = {},
+): Promise<Screen> {
   const trackList = tracks.length
     ? `\n\nSTRATEGY TRACKS (assign the posting to the one it best fits, or null if none):\n${tracks.map((t) => `${t.id}: ${t.name}: ${t.hypothesis}`).join("\n")}`
     : "";
-  return completeJson(
+  const notes = opts.notes?.length ? `\n\nNOTED BY THE SOFTWARE (checked by code, not by you):\n- ${opts.notes.join("\n- ")}` : "";
+  const reply = await completeJson(
     llm,
     {
       purpose: "screen",
@@ -96,6 +122,11 @@ export async function screenJob(
       system:
         "You screen job postings for a job seeker. Judge whether applying is worth their time: does the role match what they want, " +
         "and would a hiring manager plausibly take their application seriously given their background? Be honest about stretch roles. " +
+        "Rate five factors from 0 to 1, using only explicit evidence from their background (don't infer skills it doesn't state): " +
+        "requirements (the posting's must-haves they clearly meet), experience (level and relevance of their experience for this role), " +
+        "education (degree and field against what's asked), domain (their familiarity with this field, sector, or mission), " +
+        "goals (how well the role matches what they said they want). The software combines the factors into a fit score. " +
+        "List up to 4 gaps (requirements they lack, in the posting's terms) and up to 3 strengths. " +
         "A dealbreaker is anything the seeker listed as one, or a hard requirement they clearly lack (a license, clearance, or years of experience far beyond theirs). " +
         (goal.breadth === "broad"
           ? "This seeker is casting a wide net: they want to apply anywhere they meet roughly half the requirements and could plausibly learn the rest. Score 50 for a credible stretch, higher as the fit tightens, and below 50 when they'd be screened out on sight. "
@@ -105,16 +136,18 @@ export async function screenJob(
       messages: [
         {
           role: "user",
-          content: `<posting>\nCompany: ${job.company}\nTitle: ${job.title}\nLocation: ${job.location}\n\n${job.description.slice(0, 6000)}\n</posting>`,
+          content: `<posting>\nCompany: ${job.company}\nTitle: ${job.title}\nLocation: ${job.location}\n\n${job.description.slice(0, 6000)}\n</posting>${notes}`,
         },
       ],
     },
-    Screen,
-    tracks.length
-      ? `{"fit": 0-100, "dealbreaker": boolean, "reason": "one sentence", "track": <track id or null>}`
-      : `{"fit": 0-100, "dealbreaker": boolean, "reason": "one sentence"}`,
+    ScreenReply,
+    `{"factors": {"requirements": 0-1, "experience": 0-1, "education": 0-1, "domain": 0-1, "goals": 0-1}, "dealbreaker": boolean, "reason": "one sentence", "gaps": [], "strengths": []${tracks.length ? `, "track": <track id or null>` : ""}}`,
   );
+  const fit = reply.factors ? fitFrom(reply.factors, opts.weights ?? DEFAULT_WEIGHTS) : (reply.fit ?? 0);
+  return { ...reply, fit };
 }
+
+const DEFAULT_WEIGHTS: Weights = { requirements: 0.35, experience: 0.2, education: 0.1, domain: 0.15, goals: 0.2 };
 
 export const goalKeywords = (goal: Goal) => [...goal.keywords];
 export const goalTargets = (goal: Goal) => (goal.targetRoles.length ? goal.targetRoles : goal.titleInclude);

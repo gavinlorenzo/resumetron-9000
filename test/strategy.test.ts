@@ -32,7 +32,7 @@ function sent(ledger: Ledger, track: number, n: number, daysAgo: number, intervi
     const id = `a${seq++}`;
     const job: Job = { id, source: "t", company: `Co ${id}`, title: "Analyst", location: "", remote: false, url: `u/${id}`, applyUrl: `u/${id}`, description: "", autoApplicable: true };
     ledger.addJobs([job], "q:1");
-    ledger.setStatus(id, "submitted");
+    ledger.setStatus(id, "submitted", { force: true });
     ledger.setTrack(id, track);
     ledger.db.prepare("UPDATE jobs SET submitted_at = ? WHERE id = ?").run(new Date(Date.now() - daysAgo * 86_400_000).toISOString(), id);
     if (i < interviews) ledger.setOutcome(id, "interview");

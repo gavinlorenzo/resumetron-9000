@@ -5,7 +5,9 @@ import type { Config } from "./config.ts";
 import { extractFields } from "./forms/extract.ts";
 import { fillForm, submitForm } from "./forms/fill.ts";
 import { type Resolution, resolveFields } from "./forms/resolve.ts";
-import type { Ledger, JobRow } from "./ledger.ts";
+import { type Ledger, type JobRow, screenOf } from "./ledger.ts";
+import { checkGates } from "./gates.ts";
+import { postingSignals } from "./legitimacy.ts";
 import { BudgetExceededError, type Llm } from "./llm/index.ts";
 import { goalKeywords, goalTargets, hardFilter, pickStandard, relevance, screenJob } from "./match.ts";
 import { compose, docToText } from "./resume/compose.ts";
@@ -109,7 +111,17 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     const job = ledger.job(row);
     const ex = exclusions.find((e) => matchesExclusion(e, job));
     if (ex) hits.set(ex.id, (hits.get(ex.id) ?? 0) + 1);
-    const why = ex ? `excluded (${ex.kind}: ${ex.pattern})` : hardFilter(job, goal, cfg, ctx.pool.contact.country);
+    let why = ex ? `excluded (${ex.kind}: ${ex.pattern})` : hardFilter(job, goal, cfg, ctx.pool.contact.country);
+    if (!why) {
+      // Requirements and warning signs that code can read for itself, each with the sentence it came from.
+      const gates = checkGates(job, goal.eligibility);
+      const signals = postingSignals(job, row.reposts ?? 0);
+      if (gates.reject) why = `gate: ${gates.reject.detail} ("${gates.reject.quote}")`;
+      else if (signals.severe.length) why = `scam signal: ${signals.severe[0]}`;
+      else if (gates.unknown.length || signals.warn.length || job.flags?.length) {
+        ledger.setScreen(row.id, { gates: gates.unknown.map((h) => `${h.detail}: "${h.quote}"`), warnings: [...signals.warn, ...(job.flags ?? [])] });
+      }
+    }
     const score = relevance(job, targets, keywords);
     if (why) ledger.setStatus(row.id, "rejected", { reason: why });
     else if (!broad && score < cfg.matching.minKeywordScore) ledger.setStatus(row.id, "rejected", { reason: `low keyword match (${score.toFixed(2)})` });
@@ -161,9 +173,23 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
         ledger.setStatus(row.id, "rejected", { reason: "expired while waiting" });
         continue;
       }
+      if (cfg.matching.checkLiveness && camp.sources.alive) {
+        const live = await camp.sources.alive(job);
+        if (live.state === "closed") {
+          ledger.setStatus(row.id, "rejected", { reason: `closed: ${live.detail}` });
+          bump("closed");
+          continue;
+        }
+      }
       try {
-        const s = await screenJob(ctx.llm, job, goal, candidate, liveTracks);
+        const known = screenOf(row);
+        const notes = [
+          ...(known.gates ?? []).map((g) => `hard requirement the seeker hasn't said whether they meet: ${g}`),
+          ...(known.warnings ?? []).map((w) => `warning sign: ${w}`),
+        ];
+        const s = await screenJob(ctx.llm, job, goal, candidate, liveTracks, { weights: cfg.matching.weights, notes });
         screened++;
+        ledger.setScreen(row.id, { ...known, factors: s.factors, gaps: s.gaps, strengths: s.strengths });
         const trackId = liveTracks.some((t) => t.id === s.track) ? s.track! : originTrack(ledger, row.origin);
         ledger.setTrack(row.id, trackId);
         row.track_id = trackId;
@@ -206,6 +232,15 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     if (room <= 0) break;
     if (ledger.companyCount30d(p.job.company) >= cfg.quota.maxPerCompanyPer30Days) continue;
     log(`\n> ${p.job.company} | ${p.job.title}  (fit ${p.row.fit ?? "?"})`);
+    if (cfg.matching.checkLiveness && camp.sources.alive) {
+      const live = await camp.sources.alive(p.job);
+      if (live.state === "closed") {
+        ledger.setStatus(p.job.id, "rejected", { reason: `closed: ${live.detail}` });
+        log(`  closed: ${live.detail}`);
+        bump("closed");
+        continue;
+      }
+    }
     try {
       const packet = await preparePacket(ctx, p.job, mode, p.standard);
       room--;

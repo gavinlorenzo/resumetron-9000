@@ -187,7 +187,7 @@ async function answerWithModel(llm: Llm, fields: FormField[], inp: ResolveInputs
     const a = res.answers.find((x) => x.id === f.rtId)?.answer;
     if (a === null || a === undefined || (typeof a === "string" && !a.trim())) return missing(f, "the model could not answer from your materials");
     if (!isChoice(f) && typeof a === "string") {
-      const bad = checkProse(a, allowed);
+      const bad = checkProse(a, allowed, inp.job.description);
       if (bad.length) return missing(f, `drafted answer cited unverified facts (${bad.map((b) => b.problem).join("; ")})`);
     }
     return settle(f, a, "llm");

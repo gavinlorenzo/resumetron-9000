@@ -71,3 +71,38 @@ test("cover letter sentences with unknown facts are flagged", () => {
   assert.equal(checkProse("I briefed the NSA on it.", mun).length, 1, "unrelated acronyms are still caught");
   assert.equal(checkProse("I also interned at the White House for 2 years.", allowed).length, 1);
 });
+
+test("numbers keep their units and scale", () => {
+  const src = "Grew ARR to $2.3M across the region";
+  assert.match(checkBullet("Grew regional ARR to $2.3B", src, "").join(), /2\.3B/, "millions are not billions");
+  assert.deepEqual(checkBullet("Grew regional ARR to $2,300,000", src, ""), [], "same money, different spelling");
+  assert.match(checkBullet("Grew northeast accounts 40%", "Closed 40 accounts in the northeast", "").join(), /40%/, "a count is not a percentage");
+  assert.match(checkBullet("Led 12 engineers serving 12K users", "Led 12 engineers on the payments team", "").join(), /12K/);
+  assert.match(checkBullet("Shipped releases 3x faster", "Shipped 3 releases ahead of schedule", "").join(), /3x/);
+  assert.deepEqual(checkBullet("Drew two hundred residents to listening sessions", "Drew 200 residents to listening sessions", ""), []);
+});
+
+test("tools are caught wherever they appear", () => {
+  const src = "Cut deploy time by moving builds to a new pipeline";
+  assert.match(checkBullet("Kubernetes rollout cut deploy time on a new pipeline", src, "").join(), /kubernetes/, "first word of a sentence");
+  assert.match(checkBullet("Cut deploy time by moving builds to terraform", src, "").join(), /terraform/, "lowercase");
+  assert.match(checkBullet("Cut deploy time by moving builds to AWS", src, "").join(), /aws/, "all caps");
+  assert.deepEqual(checkBullet("Moved builds to a new pipeline, cutting deploy time", src, ""), [], "plain rewording still passes");
+  assert.deepEqual(checkBullet("Excelled at moving builds to a new pipeline to cut deploy time", src, ""), [], "ordinary words that are also product names");
+});
+
+test("a rewrite cannot raise the scope of a claim", () => {
+  assert.match(checkBullet("Managed the quarterly budget review", "Assisted with the quarterly budget review", "Finance Intern").join(), /scope/);
+  assert.match(checkBullet("Single-handedly drafted the grant proposal", "Drafted the grant proposal", "").join(), /scope/);
+  assert.deepEqual(checkBullet("Managed weekly shift schedules", "Managed the weekly shift schedule", ""), [], "the source already claims it");
+  assert.deepEqual(checkBullet("Led 40 members to 12 wins", "Directed a 40-member team to 12 wins", ""), [], "same scope, different verb");
+});
+
+test("posting numbers and tools can't become the candidate's", () => {
+  const own = "Policy Intern, City of Springfield. Researched zoning policy in 8 peer cities.";
+  const posting = "Requires 5+ years of experience with Salesforce. You will mentor junior analysts.";
+  assert.equal(checkProse("I mentored 5 engineers.", own, posting).length, 1, "a posting's 5 years can't back 5 engineers");
+  assert.equal(checkProse("You ask for 5+ years of experience, and I bring 8 cities of research instead.", own, posting).length, 0, "restating the posting is fine");
+  assert.equal(checkProse("I have used Salesforce daily.", own, posting).length, 1, "a tool only the posting names is not the candidate's");
+  assert.equal(checkProse("Your team works in Salesforce.", own, posting).length, 0, "naming the posting's tool is fine");
+});

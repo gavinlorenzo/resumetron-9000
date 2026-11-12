@@ -57,3 +57,32 @@ export async function fetchJson(url: string, init: RequestInit = {}): Promise<an
 }
 
 export const errorMessage = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const TRACKING = /^(utm_\w+|gh_src|source|src|ref|refs|referrer|lever-source|lever-origin|trk|trackingid|fbclid|gclid|mc_cid|mc_eid|_hs\w+|hsa_\w+|iis|iisn|campaign)$/i;
+
+/**
+ * One key per posting URL, however it was linked: tracking parameters, "www.", trailing
+ * slashes and "/apply" removed. Workday and SmartRecruiters postings key on their requisition id,
+ * since the same job is linked under many paths.
+ */
+export function canonicalUrl(raw: string): string {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return raw.trim().toLowerCase();
+  }
+  const host = u.hostname.toLowerCase().replace(/^www\./, "");
+  const wd = host.match(/^([\w-]+)\.wd\d+\.myworkdayjobs\.com$/);
+  if (wd) {
+    const req = u.pathname.match(/_([A-Z]*-?\d[\w-]*)(?:\/|$)/i);
+    if (req) return `workday:${wd[1]}:${req[1].toLowerCase()}`;
+  }
+  const sr = host === "jobs.smartrecruiters.com" ? u.pathname.match(/\/(\d{6,})/) : null;
+  if (sr) return `smartrecruiters:${sr[1]}`;
+  for (const k of [...u.searchParams.keys()]) if (TRACKING.test(k)) u.searchParams.delete(k);
+  u.searchParams.sort();
+  const path = u.pathname.replace(/\/(apply|application|applications)\/?$/i, "").replace(/\/+$/, "");
+  const q = u.searchParams.toString();
+  return `${host}${path}${q ? `?${q}` : ""}`.toLowerCase();
+}

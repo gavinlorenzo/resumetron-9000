@@ -19,7 +19,7 @@ export function mockLlm(pool: Pool): Llm & { calls: LlmRequest[] } {
       const reply = (() => {
         switch (req.purpose) {
           case "screen":
-            return { fit: 88, dealbreaker: false, reason: "policy research role matching the internship", track: 1 };
+            return { factors: { requirements: 0.9, experience: 0.8, education: 0.9, domain: 0.9, goals: 0.9 }, dealbreaker: false, reason: "policy research role matching the internship", gaps: ["GIS mapping"], strengths: ["briefing memos"], track: 1 };
           case "strategy":
             return {
               memo: "Two bets to start.",

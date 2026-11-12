@@ -163,7 +163,7 @@ export async function writeCoverLetter(
   const paragraphs = letter.paragraphs
     .map((p) => {
       let out = p;
-      for (const bad of checkProse(p, allowed)) {
+      for (const bad of checkProse(p, allowed, job.description)) {
         removed.push(`${bad.sentence} [${bad.problem}]`);
         out = out.replace(bad.sentence, "").trim();
       }

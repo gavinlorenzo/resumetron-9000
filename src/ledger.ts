@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { LlmUsage } from "./llm/index.ts";
 import type { Job } from "./schema.ts";
-import { normalize } from "./util.ts";
+import { canonicalUrl, normalize } from "./util.ts";
 
 export type JobStatus =
   | "discovered" // fetched, not yet evaluated
@@ -28,6 +28,10 @@ export interface JobRow {
   packet_dir: string | null;
   origin: string | null; // "q:<query id>" or "b:<ats>:<token>": which search surfaced it
   track_id: number | null;
+  /** Screening detail as JSON: factor scores, gaps, strengths, gate notes and warning signs. */
+  screen: string | null;
+  /** How many times this job reappeared under a new listing. */
+  reposts: number;
   outcome: Outcome | null;
   channel: string | null; // form | email | manual
   email_msg_id: string | null;
@@ -37,6 +41,18 @@ export interface JobRow {
   submitted_at: string | null;
   updated_at: string | null;
 }
+
+/** What screening and the code-side checks found about one job. */
+export interface ScreenDetail {
+  factors?: Record<string, number>;
+  gaps?: string[];
+  strengths?: string[];
+  /** Hard requirements the seeker's eligibility doesn't settle. */
+  gates?: string[];
+  warnings?: string[];
+}
+
+export const screenOf = (row: Pick<JobRow, "screen">): ScreenDetail => (row.screen ? JSON.parse(row.screen) : {});
 
 export interface QueryRow {
   id: number;
@@ -111,6 +127,19 @@ export interface ExclusionRow {
   created_at: string;
 }
 
+/** Which status changes are allowed. Anything else is a bug, so it throws. */
+export const TRANSITIONS: Record<JobStatus, JobStatus[]> = {
+  discovered: ["rejected", "matched", "skipped"],
+  matched: ["rejected", "ready", "needs_human", "submitted", "unconfirmed", "failed", "skipped"],
+  ready: ["needs_human", "submitted", "unconfirmed", "failed", "skipped", "rejected"],
+  needs_human: ["ready", "submitted", "unconfirmed", "failed", "skipped", "rejected"],
+  unconfirmed: ["submitted", "needs_human", "failed"],
+  failed: ["ready", "needs_human", "submitted", "unconfirmed", "skipped"],
+  submitted: [],
+  skipped: ["ready", "needs_human"],
+  rejected: [],
+};
+
 /** Statuses that count as an application against quotas. */
 const ATTEMPTED = `('ready','needs_human','submitted','unconfirmed','failed')`;
 /** Statuses that will never change on their own. Their stored postings can be slimmed. */
@@ -182,6 +211,7 @@ export class Ledger {
       ["jobs", "outcome_at TEXT"], ["jobs", "channel TEXT"], ["jobs", "email_msg_id TEXT"],
       ["queries", "screened INTEGER NOT NULL DEFAULT 0"], ["queries", "track_id INTEGER"],
       ["boards", "screened INTEGER NOT NULL DEFAULT 0"],
+      ["jobs", "canon TEXT"], ["jobs", "screen TEXT"], ["jobs", "reposts INTEGER NOT NULL DEFAULT 0"], ["jobs", "aliases TEXT"],
     ]) {
       try {
         this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
@@ -190,6 +220,7 @@ export class Ledger {
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS jobs_status ON jobs(status);
       CREATE INDEX IF NOT EXISTS jobs_fingerprint ON jobs(fingerprint);
+      CREATE INDEX IF NOT EXISTS jobs_canon ON jobs(canon);
     `);
     // Older workspaces logged one row per model call; fold them into daily totals.
     if (this.db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'usage'").get()) {
@@ -208,10 +239,12 @@ export class Ledger {
    * aggregator is upgraded in place when a company board offers an auto-fillable form for it.
    */
   addJobs(jobs: Job[], origin: string): { fresh: number; seen: number } {
-    const find = this.db.prepare("SELECT id, status, job_json FROM jobs WHERE id = ? OR fingerprint = ? LIMIT 1");
+    const find = this.db.prepare(
+      "SELECT id, status, job_json, discovered_at, aliases FROM jobs WHERE id = ? OR fingerprint = ? OR canon = ? OR canon = ? LIMIT 1",
+    );
     const insert = this.db.prepare(
-      `INSERT INTO jobs (id, source, company, title, location, url, apply_url, fingerprint, status, job_json, origin, discovered_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?, ?)`,
+      `INSERT INTO jobs (id, source, company, title, location, url, apply_url, fingerprint, canon, status, job_json, origin, discovered_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'discovered', ?, ?, ?, ?)`,
     );
     const upgrade = this.db.prepare("UPDATE jobs SET url = ?, apply_url = ?, job_json = ?, updated_at = ? WHERE id = ?");
     let fresh = 0;
@@ -229,8 +262,9 @@ export class Ledger {
   private addJobsInner(jobs: Job[], origin: string, find: any, insert: any, upgrade: any): number {
     let fresh = 0;
     for (const j of jobs) {
-      const existing = find.get(j.id, fingerprint(j)) as any;
+      const existing = find.get(j.id, fingerprint(j), canonicalUrl(j.url), canonicalUrl(j.applyUrl)) as any;
       if (existing) {
+        this.noteRepost(existing, j);
         if (["discovered", "matched"].includes(existing.status) && j.autoApplicable) {
           const old: Job = JSON.parse(existing.job_json);
           if (!old.autoApplicable) {
@@ -241,10 +275,25 @@ export class Ledger {
         continue;
       }
       const t = now();
-      insert.run(j.id, j.source, j.company, j.title, j.location, j.url, j.applyUrl, fingerprint(j), JSON.stringify(j), origin, t, t);
+      insert.run(j.id, j.source, j.company, j.title, j.location, j.url, j.applyUrl, fingerprint(j), canonicalUrl(j.url), JSON.stringify(j), origin, t, t);
       fresh++;
     }
     return fresh;
+  }
+
+  /**
+   * The same job under a new listing, two weeks or more after it was first seen, from the same
+   * source: a repost. Several of those suggest a ghost job. Aggregators relisting a job don't count.
+   */
+  private noteRepost(existing: { id: string; discovered_at: string; aliases: string | null; job_json: string }, j: Job): void {
+    if (existing.id === j.id) return;
+    const aliases: string[] = JSON.parse(existing.aliases ?? "[]");
+    if (aliases.includes(j.id)) return;
+    const old: Job = JSON.parse(existing.job_json);
+    const repost = old.source === j.source && Date.now() - Date.parse(existing.discovered_at) >= 14 * 86_400_000;
+    this.db
+      .prepare("UPDATE jobs SET aliases = ?, reposts = reposts + ? WHERE id = ?")
+      .run(JSON.stringify([...aliases, j.id].slice(-20)), repost ? 1 : 0, existing.id);
   }
 
   /** Runs several writes as one transaction: one commit instead of one per row. */
@@ -275,7 +324,15 @@ export class Ledger {
       .all(...statuses) as unknown as JobRow[];
   }
 
-  setStatus(id: string, status: JobStatus, fields: { fit?: number; reason?: string; packet_dir?: string } = {}): void {
+  /**
+   * Moves a job to a new status. Only the moves in TRANSITIONS are allowed; `force` is for
+   * things you record yourself ("I applied to this one on my own").
+   */
+  setStatus(id: string, status: JobStatus, fields: { fit?: number; reason?: string; packet_dir?: string; force?: boolean } = {}): void {
+    const cur = (this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as { status: JobStatus } | undefined)?.status;
+    if (cur && !fields.force && cur !== status && !TRANSITIONS[cur].includes(status)) {
+      throw new Error(`a job can't go from ${cur} to ${status}`);
+    }
     const t = now();
     this.db
       .prepare(
@@ -331,6 +388,10 @@ export class Ledger {
       const [, ats, token] = origin.split(":");
       this.db.prepare("UPDATE boards SET screened = screened + 1, matched = matched + ? WHERE ats = ? AND token = ?").run(m, ats, token);
     }
+  }
+
+  setScreen(jobId: string, detail: ScreenDetail): void {
+    this.db.prepare("UPDATE jobs SET screen = ? WHERE id = ?").run(JSON.stringify(detail), jobId);
   }
 
   setTrack(jobId: string, trackId: number | null): void {

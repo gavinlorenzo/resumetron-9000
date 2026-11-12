@@ -16,6 +16,7 @@ import { compose, docToText, identityPlan } from "./resume/compose.ts";
 import { removeSchedule, describeSchedule, installSchedule } from "./schedule.ts";
 import type { Job } from "./schema.ts";
 import { type Ats, checkBoard, searchSources } from "./sources.ts";
+import { cleanPosting } from "./posting.ts";
 import { errorMessage, htmlToText, safeFileName, shortHash } from "./util.ts";
 import {
   type Workspace, initWorkspace, loadAnswers, loadConfig, loadGoal, loadPool, loadStandards, workspaceAt, writeYaml,
@@ -155,12 +156,15 @@ program
   .option("--company <company>", "company name", "the company")
   .action(async (posting: string, o) =>
     withCtx(async (ctx) => {
-      const description = /^https?:\/\//.test(posting)
-        ? htmlToText(await (await fetch(posting, { headers: { "User-Agent": "resumetron-9000" } })).text())
-        : readFileSync(posting, "utf8");
+      const web = /^https?:\/\//.test(posting);
+      const clean = cleanPosting(
+        web ? await (await fetch(posting, { headers: { "User-Agent": "resumetron-9000" } })).text() : readFileSync(posting, "utf8"),
+        { html: web },
+      );
+      if (clean.flags.length) log(`Posting flags: ${clean.flags.join("; ")}`);
       const job: Job = {
         id: `preview-${shortHash(posting)}`, source: "preview", company: o.company, title: o.title, location: "", remote: false,
-        url: posting, applyUrl: posting, description, autoApplicable: false,
+        url: posting, applyUrl: posting, description: clean.text, autoApplicable: false, flags: clean.flags,
       };
       const packet = await preparePacket(ctx, job, "tailored");
       log(`Wrote ${packet.dir}`);
@@ -398,7 +402,7 @@ program
     try {
       const row = ledger.get(id);
       if (!row) throw new Error(`no job ${id}`);
-      if (!["submitted", "unconfirmed"].includes(row.status)) ledger.setStatus(row.id, "submitted", { reason: "submitted (recorded by you)" });
+      if (!["submitted", "unconfirmed"].includes(row.status)) ledger.setStatus(row.id, "submitted", { reason: "submitted (recorded by you)", force: true });
       const changed = ledger.setOutcome(row.id, outcome as Outcome);
       ledger.note("outcome", `${row.company} | ${row.title}: ${outcome} (recorded by you)`);
       log(changed ? `Recorded: ${row.company} | ${row.title}: ${outcome}` : `Kept the existing outcome (${row.outcome}); outcomes only move forward.`);

@@ -94,6 +94,24 @@ export const CompanyBoard = z.object({
   notes: z.string().optional(),
 });
 
+/**
+ * What the seeker has said about their eligibility. Used only by code (src/gates.ts) to reject
+ * postings that clearly require something they lack. null means "not said": nothing is rejected on it.
+ */
+export const Eligibility = z
+  .object({
+    needsSponsorship: z.boolean().nullable().default(null),
+    usCitizen: z.boolean().nullable().default(null),
+    /** none: can't get one. eligible: could obtain one. active: holds one now. */
+    clearance: z.enum(["none", "eligible", "active"]).nullable().default(null),
+    yearsExperience: z.number().nullable().default(null),
+    degree: z.enum(["none", "associate", "bachelor", "master", "doctorate"]).nullable().default(null),
+    /** Languages other than English they work in. Empty means "not said". */
+    languages: z.array(z.string()).default([]),
+  })
+  .prefault({});
+export type Eligibility = z.infer<typeof Eligibility>;
+
 /** One opening bet about where interviews will come from. See src/strategy.ts. */
 export const TrackSeed = z.object({
   name: z.string(),
@@ -132,6 +150,7 @@ export const Goal = z.object({
    * Read only once: after that the ledger owns the tracks and the weekly review revises them.
    */
   tracks: z.array(TrackSeed).default([]),
+  eligibility: Eligibility,
 });
 export type Goal = z.infer<typeof Goal>;
 
@@ -205,4 +224,6 @@ export interface Job {
   autoApplicable: boolean;
   /** For remote roles: the countries or regions the employer hires from, when it says. */
   remoteRegions?: string[];
+  /** What the posting scrubber and legitimacy checks noticed. Shown to you; screening sees them too. */
+  flags?: string[];
 }

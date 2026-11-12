@@ -46,6 +46,18 @@ export const Config = z.object({
       /** Bar when goal.breadth is "broad": roles you're roughly half-qualified for. */
       minFitBroad: z.number().default(50),
       maxScreenPerRun: z.number().default(20),
+      /** How screening's five factor ratings combine into the fit score. Normalized, so they needn't sum to 1. */
+      weights: z
+        .object({
+          requirements: z.number().default(0.35),
+          experience: z.number().default(0.2),
+          education: z.number().default(0.1),
+          domain: z.number().default(0.15),
+          goals: z.number().default(0.2),
+        })
+        .prefault({}),
+      /** Check that a posting is still open before screening it and before applying. */
+      checkLiveness: z.boolean().default(true),
     })
     .prefault({}),
   campaign: z

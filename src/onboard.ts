@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import type { Interface } from "node:readline/promises";
 import { z } from "zod";
-import { numbersIn } from "./guard.ts";
+import { quantities, unbackedNumbers } from "./guard.ts";
 import { type Llm, completeJson } from "./llm/index.ts";
 import { docToText } from "./resume/compose.ts";
 import { AnswerEntry, Goal, Pool } from "./schema.ts";
@@ -139,14 +139,14 @@ export async function importPool(
     POOL_SHAPE,
   );
   // Any number the source material never mentioned is treated as invented.
-  const allowed = numbersIn(`${docs}\n${existing ? JSON.stringify(existing) : ""}`);
+  const allowed = quantities(`${docs}\n${existing ? JSON.stringify(existing) : ""}`);
   const dropped: string[] = [];
   for (const s of pool.sections) {
     if (s.type !== "experience") continue;
     for (const e of s.entries)
       for (const r of e.roles)
         r.bullets = r.bullets.filter((b) => {
-          const bad = [...numbersIn(b.text)].filter((n) => !allowed.has(n));
+          const bad = unbackedNumbers(b.text, allowed);
           if (bad.length) dropped.push(`${b.text} [numbers not in your documents: ${bad.join(", ")}]`);
           return bad.length === 0;
         });

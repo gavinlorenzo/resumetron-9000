@@ -1,5 +1,7 @@
 import type { Config } from "./config.ts";
 import type { Job } from "./schema.ts";
+import { type Liveness, checkLiveness } from "./liveness.ts";
+import { cleanPosting } from "./posting.ts";
 import { fetchJson, htmlToText, shortHash } from "./util.ts";
 
 // Job sources are official public APIs only. LinkedIn and Indeed are deliberately absent:
@@ -16,11 +18,18 @@ export interface SourceSet {
   search(source: SearchSource, query: string, location: string, page: number): Promise<{ jobs: Job[]; more: boolean }>;
   /** Finds a company's Greenhouse, Lever, or Ashby board, if it has one. */
   findBoard(company: string): Promise<{ ats: Ats; token: string } | null>;
+  /** Whether a posting is still open. Optional: without it, every job is assumed open. */
+  alive?(job: Job): Promise<Liveness>;
 }
 
 const isRemote = (...xs: (string | undefined)[]) => xs.some((x) => x && /remote|anywhere|distributed/i.test(x));
 
-const job = (j: Omit<Job, "id">): Job => ({ ...j, id: shortHash(`${j.source}|${j.url}`) });
+/** Builds a job with its id, and cleans the description before anything reads it. */
+const job = (j: Omit<Job, "id" | "description"> & { description?: string; html?: string }): Job => {
+  const { html, description, ...rest } = j;
+  const clean = cleanPosting(html ?? description ?? "", { html: html !== undefined });
+  return { ...rest, description: clean.text, ...(clean.flags.length ? { flags: clean.flags } : {}), id: shortHash(`${j.source}|${j.url}`) };
+};
 
 // ---------------- company boards ----------------
 
@@ -36,7 +45,7 @@ async function greenhouse(token: string, name?: string): Promise<Job[]> {
       url: j.absolute_url,
       // The hosted form works for every board, even when absolute_url is a company site.
       applyUrl: `https://job-boards.greenhouse.io/embed/job_app?for=${encodeURIComponent(token)}&token=${j.id}`,
-      description: htmlToText(j.content ?? ""),
+      html: j.content ?? "",
       postedAt: j.first_published ?? j.updated_at,
       autoApplicable: true,
     }),
@@ -54,9 +63,9 @@ async function lever(site: string, name?: string): Promise<Job[]> {
       remote: j.workplaceType === "remote" || isRemote(j.categories?.location),
       url: j.hostedUrl,
       applyUrl: j.applyUrl ?? `${j.hostedUrl}/apply`,
-      description: [j.descriptionPlain, ...(j.lists ?? []).map((l: any) => `${l.text}\n${htmlToText(l.content)}`), j.additionalPlain]
+      html: [j.description ?? j.descriptionPlain, ...(j.lists ?? []).map((l: any) => `<h3>${l.text}</h3>${l.content ?? ""}`), j.additional ?? j.additionalPlain]
         .filter(Boolean)
-        .join("\n"),
+        .join("<br>"),
       postedAt: j.createdAt ? new Date(j.createdAt).toISOString() : undefined,
       salaryMin: j.salaryRange?.min,
       salaryMax: j.salaryRange?.max,
@@ -78,7 +87,7 @@ async function ashby(board: string, name?: string): Promise<Job[]> {
         remote: Boolean(j.isRemote) || isRemote(j.location),
         url: j.jobUrl,
         applyUrl: j.applyUrl ?? `${j.jobUrl}/application`,
-        description: j.descriptionPlain ?? htmlToText(j.descriptionHtml ?? ""),
+        ...(j.descriptionHtml ? { html: j.descriptionHtml } : { description: j.descriptionPlain ?? "" }),
         postedAt: j.publishedAt,
         autoApplicable: true,
       }),
@@ -159,7 +168,7 @@ async function adzuna(cfg: NonNullable<Config["sources"]["adzuna"]>, query: stri
       remote: isRemote(j.location?.display_name, j.title, j.description),
       url: j.redirect_url,
       applyUrl: j.redirect_url,
-      description: htmlToText(j.description ?? ""), // Adzuna returns a snippet only
+      html: j.description ?? "", // Adzuna returns a snippet only
       postedAt: j.created,
       salaryMin: j.salary_min,
       salaryMax: j.salary_max,
@@ -182,7 +191,7 @@ async function himalayas(query: string, page: number): Promise<Page> {
       remoteRegions: regions,
       url: j.guid ?? j.applicationLink,
       applyUrl: j.applicationLink ?? j.guid,
-      description: htmlToText(j.description ?? j.excerpt ?? ""),
+      html: j.description ?? j.excerpt ?? "",
       postedAt: j.pubDate ? new Date(j.pubDate * 1000).toISOString() : undefined,
       salaryMin: j.salaryPeriod === "annual" ? j.minSalary ?? undefined : undefined,
       salaryMax: j.salaryPeriod === "annual" ? j.maxSalary ?? undefined : undefined,
@@ -206,7 +215,7 @@ async function remotive(query: string): Promise<Page> {
       remoteRegions: anywhere ? [] : where.split(/,\s*/),
       url: j.url,
       applyUrl: j.url,
-      description: htmlToText(j.description ?? ""),
+      html: j.description ?? "",
       postedAt: j.publication_date,
       autoApplicable: false,
     });
@@ -216,6 +225,7 @@ async function remotive(query: string): Promise<Page> {
 
 export function liveSources(cfg: Config): SourceSet {
   return {
+    alive: checkLiveness,
     sweep: (ats, token, company) => BOARDS[ats](token, company),
     search(source, query, location, page) {
       switch (source) {
