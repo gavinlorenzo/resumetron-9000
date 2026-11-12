@@ -103,6 +103,8 @@ export const Config = z.object({
     .object({
       tailored: z.enum(["off", "template", "generated"]).default("generated"),
       efficiency: z.enum(["off", "template", "generated"]).default("template"),
+      /** A second, fresh-eyed pass that suggests edits; kept only if the letter gets no worse. One extra model call per letter. */
+      review: z.boolean().default(true),
     })
     .prefault({}),
   efficiency: z

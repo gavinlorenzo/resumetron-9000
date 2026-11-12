@@ -194,7 +194,7 @@ async function answerWithModel(llm: Llm, fields: FormField[], inp: ResolveInputs
     Answers,
     `{"answers": [{"id": "<question id>", "answer": "<text, exact option, list of options, or null>"}]}`,
   );
-  const allowed = `${inp.resumeText}\n${inp.pool.facts.join("\n")}\n${inp.job.company}\n${inp.job.title}\n${inp.job.description}`;
+  const allowed = `${inp.resumeText}\n${inp.pool.facts.join("\n")}\n${inp.job.company}\n${inp.job.title}`;
   return fields.map((f) => {
     const a = res.answers.find((x) => x.id === f.rtId)?.answer;
     if (a === null || a === undefined || (typeof a === "string" && !a.trim())) return missing(f, "the model could not answer from your materials");

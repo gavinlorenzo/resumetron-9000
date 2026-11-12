@@ -156,6 +156,11 @@ export const Goal = z.object({
    */
   tracks: z.array(TrackSeed).default([]),
   eligibility: Eligibility,
+  /**
+   * Standing instructions you gave while reviewing packets ("never lead with the barista job",
+   * "skip roles that are mostly sales"). Tailoring, cover letters and screening all follow them.
+   */
+  lessons: z.array(z.string()).default([]),
 });
 export type Goal = z.infer<typeof Goal>;
 

@@ -336,7 +336,7 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
   const coverMode = mode === "efficiency" ? cfg.coverLetter.efficiency : cfg.coverLetter.tailored;
   let paragraphs: string[] | undefined;
   if (coverMode === "generated") {
-    const letter = await writeCoverLetter(ctx.llm, pool, ctx.goal, job, resumeText);
+    const letter = await writeCoverLetter(ctx.llm, pool, ctx.goal, job, resumeText, { review: cfg.coverLetter.review });
     paragraphs = letter.paragraphs;
     removed = letter.removed;
     coverCheck = { hooks: letter.hooks, problems: letter.problems };

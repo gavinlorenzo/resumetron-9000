@@ -34,6 +34,9 @@ export function mockLlm(pool: Pool): Llm & { calls: LlmRequest[] } {
             return plan;
           }
           case "cover": {
+            if (req.messages[0].content.includes("<letter>")) {
+              return { edits: [{ old: "Your posting also asks for help to support", new: "Your posting also asks for someone to support", why: "tighter" }] };
+            }
             const company = req.messages[0].content.match(/Company: (.+)/)![1];
             return {
               hooks: [

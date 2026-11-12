@@ -128,6 +128,7 @@ test("auto mode: filters, tailors, fills, submits, and records the result", asyn
   const packet = JSON.parse(readFileSync(join(sub.packet_dir!, "packet.json"), "utf8"));
   assert.equal(packet.guard.removedCoverSentences.length, 1);
   assert.match(packet.guard.removedCoverSentences[0], /Pulitzer/);
+  assert.ok(packet.cover, "cover check recorded");
 
   // A second run finds nothing new and applies to nothing twice.
   const again = await run(ctx);
