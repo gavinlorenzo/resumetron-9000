@@ -272,7 +272,7 @@ test("answers your pool states outright: latest employer and title, school, degr
 
 test("option lists name things in full", async () => {
   const { matchOption } = await import("../src/forms/resolve.ts");
-  assert.equal(matchOption("The University of Alabama", ["University of Alabama", "University of Alabama at Birmingham"]), "University of Alabama");
-  assert.equal(matchOption("Cumming, GA", ["Cumming, Georgia, United States", "Cumming, Iowa, United States"]), "Cumming, Georgia, United States");
+  assert.equal(matchOption("The University of Springfield", ["University of Springfield", "University of Springfield at Shelbyville"]), "University of Springfield");
+  assert.equal(matchOption("Athens, GA", ["Athens, Georgia, United States", "Athens, Ohio, United States"]), "Athens, Georgia, United States");
   assert.equal(matchOption("Springfield, IL", ["Springfield, Illinois, United States", "Springfield, Missouri, United States"]), "Springfield, Illinois, United States");
 });
