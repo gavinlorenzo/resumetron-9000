@@ -87,7 +87,7 @@ export type ResumeDoc = Pick<Pool, "contact" | "sections">;
 // ---- Search goal, produced by the interview. ----
 
 export const CompanyBoard = z.object({
-  ats: z.enum(["greenhouse", "lever", "ashby"]),
+  ats: z.enum(["greenhouse", "lever", "ashby", "smartrecruiters", "workable", "recruitee", "workday"]),
   token: z.string(),
   name: z.string().optional(),
   /** Your own reasons for wanting to work there. Cover letters may draw on these. */

@@ -140,6 +140,7 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
     return tally;
   }
   const matchedCompanies: string[] = [];
+  const matchedJobs: Job[] = [];
 
   // 2. Rank what's left. Tailored mode asks the model; efficiency mode matches standards.
   type Pick = { row: JobRow; job: Job; standard?: Standard };
@@ -200,7 +201,10 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
         } else {
           ledger.setStatus(row.id, "matched", { fit: s.fit, reason: `screened: ${s.reason}` });
           ledger.credit(row.origin, true);
-          if (!job.autoApplicable) matchedCompanies.push(job.company);
+          if (!job.autoApplicable) {
+            matchedCompanies.push(job.company);
+            matchedJobs.push(job);
+          }
           picks.push({ row: { ...row, fit: s.fit }, job });
         }
       } catch (e) {
@@ -213,7 +217,7 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
 
   // A good match from an aggregator means the employer may have a board worth reading in full,
   // and that board's form can usually be filled automatically.
-  const found = await discoverBoards(camp, matchedCompanies);
+  const found = await discoverBoards(camp, matchedCompanies, matchedJobs);
   if (found.length) {
     log(`Found job boards: ${found.join(", ")}`);
     const more = await sweepNewBoards(camp);
@@ -420,9 +424,11 @@ export async function processForm(
   packet: Packet,
   opts: { submit: boolean; mode: Config["mode"]; headless?: boolean; keepOpen?: boolean },
 ): Promise<FormResult> {
-  if (!job.autoApplicable) {
+  // A handoff fills what it can on any site, since you finish and submit it yourself.
+  const assisted = opts.keepOpen && opts.headless === false && !opts.submit;
+  if (!job.autoApplicable && !assisted) {
     if (ctx.cfg.email?.send && applyByEmailAddress(job)) return emailApplication(ctx, job, packet, opts.submit);
-    return { status: "needs_human", detail: `finish on ${new URL(job.applyUrl).host}; your documents are in ${packet.dir}` };
+    return { status: "needs_human", detail: `finish on ${new URL(job.applyUrl).host} (resumetron apply ${job.id.slice(0, 8)} --handoff fills what it can); your documents are in ${packet.dir}` };
   }
   const page = await ctx.browser.newPage(opts.headless);
   try {
@@ -458,7 +464,10 @@ export async function processForm(
     if (!opts.submit) return { status: "ready", detail: `form pre-filled; ${resolutions.filter((r) => r.source === "llm").length} model-written answer(s) to review` };
 
     const sent = await submitForm(page);
+    // Proof of what the site said, kept with the packet.
     await page.screenshot({ path: join(packet.dir, "after-submit.png"), fullPage: true }).catch(() => {});
+    const proof = await page.locator("body").innerText().catch(() => "");
+    writeFileSync(join(packet.dir, "after-submit.txt"), `${new Date().toISOString()}\n${page.url()}\n${sent.outcome}: ${sent.detail}\n\n${proof.slice(0, 20_000)}`);
     if (sent.outcome === "blocked") return { status: "needs_human", detail: `${sent.detail}; run \`resumetron apply ${job.id} --handoff\`` };
     return { status: sent.outcome, detail: sent.detail };
   } finally {

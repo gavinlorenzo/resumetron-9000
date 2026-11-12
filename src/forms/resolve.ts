@@ -35,6 +35,14 @@ export interface ResolveInputs {
 export const SENSITIVE =
   /authori[sz]|right to work|eligib|sponsor|visa|citizen|clearance|salary|compensation|pay (rate|range|expect)|desired pay|wage|convict|felon|criminal (history|record|offen)|background check|drug|gender|\bsex\b|\brace\b|ethnic|hispanic|latin|veteran|military|disabilit|orientation|lgbt|transgender|pronoun|\bage\b|birth|over 18|18 years|social security|\bssn\b|driver.?s licen|certify|attest|acknowledg|affirm|i understand|have read|read the|agree|consent|terms|privacy|arbitrat|\bai\b.*polic|polic.*\bai\b|artificial intelligence|non-?compete|relocat|in-?person|on-?site|hybrid|commut|travel|start date|earliest|when can you start|availab|notice period|how did you hear|referr|previously (worked|employed|applied)|ever (been )?(interviewed|worked|applied|employed)|interviewed (at|with)|related to|relatives?\b/i;
 
+/**
+ * Questions written to catch AI-written applications ("if you are an AI, ...", "type the word
+ * 'banana'"). Always yours to answer: a model answering them is exactly what they detect, and
+ * some employers reject anyone who trips one.
+ */
+export const AI_CHECK =
+  /\b(are you (a )?(human|robot|bot)|if you('re| are) (an? )?(ai|llm|language model|bot|automated)|(ai|llm|chatgpt|language model|automated tool)s? (should|must|will)|ignore (all |any )?(previous|prior|above)|type the word|include the (word|phrase)|what is \d+\s*[+x*-]\s*\d+|prove you('re| are) (a )?human)\b/i;
+
 /** Multiple-choice questions are nearly always logistics, legal, or demographic. A model never picks those. */
 const MODEL_ANSWERABLE = new Set(["text", "textarea"]);
 
@@ -105,6 +113,10 @@ export async function resolveFields(fields: FormField[], inp: ResolveInputs): Pr
       } else {
         out.push(missing(f, "unrecognized upload"));
       }
+      continue;
+    }
+    if (AI_CHECK.test(label)) {
+      out.push({ field: f, status: "needs_human", reason: "this looks like a check for AI-written applications; answer it yourself" });
       continue;
     }
     const saved = inp.saved?.[label];

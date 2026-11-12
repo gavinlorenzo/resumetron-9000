@@ -15,7 +15,8 @@ import { type Ctx, buildStandardPlan, packetFor, preparePacket, processForm, run
 import { compose, docToText, identityPlan } from "./resume/compose.ts";
 import { removeSchedule, describeSchedule, installSchedule } from "./schedule.ts";
 import type { Job } from "./schema.ts";
-import { type Ats, checkBoard, searchSources } from "./sources.ts";
+import { ATS_NAMES, type Ats, FILLABLE, boardFromUrl, checkBoard, searchSources } from "./sources.ts";
+import { checkLiveness } from "./liveness.ts";
 import { cleanPosting } from "./posting.ts";
 import { errorMessage, htmlToText, safeFileName, shortHash } from "./util.ts";
 import {
@@ -201,16 +202,21 @@ standard
 program
   .command("boards")
   .description("check company job-board tokens from goal.yaml, or add one to the campaign")
-  .option("--add <ats:token>", "add a board, e.g. greenhouse:acme")
+  .option("--add <board>", "add a board: a careers-page URL, or ats:token (e.g. greenhouse:acme, workday:nvidia/wd5/NVIDIAExternalCareerSite)")
+  .option("--name <company>", "company name for the board you're adding")
   .action(async (o) => {
     if (o.add) {
-      const [ats, token] = String(o.add).split(":");
-      if (!["greenhouse", "lever", "ashby"].includes(ats) || !token) throw new Error("use --add greenhouse:<token>, lever:<token>, or ashby:<token>");
-      const n = await checkBoard(ats as Ats, token);
+      const spec = String(o.add);
+      const fromUrl = /^https?:\/\//.test(spec) ? boardFromUrl(spec) : null;
+      const [ats, ...rest] = spec.split(":");
+      const board = fromUrl ?? (ATS_NAMES.includes(ats as Ats) && rest.length ? { ats: ats as Ats, token: rest.join(":") } : null);
+      if (!board) throw new Error(`use a careers-page URL or ats:token, where ats is one of ${ATS_NAMES.join(", ")}`);
+      const n = await checkBoard(board.ats, board.token);
+      if (!n) throw new Error(`${board.ats}:${board.token} lists no open roles; check the token`);
       const ledger = new Ledger(ws().ledger);
-      ledger.addBoard(ats as Ats, token, token, "user");
+      ledger.addBoard(board.ats, board.token, o.name ?? board.token.split("/")[0], "user");
       ledger.close();
-      return log(`Added ${ats}:${token} (${n} open roles).`);
+      return log(`Added ${board.ats}:${board.token} (${n} open roles)${FILLABLE.includes(board.ats) ? "" : ". Its forms aren't filled automatically: packets are prepared and `apply --handoff` fills what it can for you to finish"}.`);
     }
     for (const c of loadGoal(ws()).companies) {
       try {
@@ -520,11 +526,23 @@ program
   .argument("<id>")
   .description("submit an application you've reviewed")
   .option("--handoff", "open a visible browser with everything filled in; you finish and click submit")
+  .option("--force", "submit even though it may already have gone out (status submitted or unconfirmed)")
   .action(async (id: string, o) =>
     withCtx(async (ctx) => {
       const row = ctx.ledger.get(id);
       if (!row?.packet_dir) throw new Error(`no prepared application ${id}`);
+      // An unconfirmed submission may well have arrived: sending again risks a duplicate application.
+      if (["submitted", "unconfirmed"].includes(row.status) && !o.force) {
+        throw new Error(`${row.company} | ${row.title} is ${row.status} (${row.reason ?? ""}); check ${join(row.packet_dir, "after-submit.png")} before using --force`);
+      }
       const job = ctx.ledger.job(row);
+      if (ctx.cfg.matching.checkLiveness) {
+        const live = await checkLiveness(job);
+        if (live.state === "closed") {
+          ctx.ledger.setStatus(row.id, "rejected", { reason: `closed: ${live.detail}` });
+          return log(`Not applying: ${live.detail}.`);
+        }
+      }
       const packet = packetFor(row.packet_dir, ctx.pool.contact.name);
       if (o.handoff) {
         await processForm(ctx, job, packet, { submit: false, mode: ctx.cfg.mode, headless: false, keepOpen: true });

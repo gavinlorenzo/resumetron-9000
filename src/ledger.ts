@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import type { LlmUsage } from "./llm/index.ts";
 import type { Job } from "./schema.ts";
+import type { Ats } from "./sources.ts";
 import { canonicalUrl, normalize } from "./util.ts";
 
 export type JobStatus =
@@ -75,7 +76,7 @@ export interface QueryRow {
 }
 
 export interface BoardRow {
-  ats: "greenhouse" | "lever" | "ashby";
+  ats: Ats;
   token: string;
   company: string;
   origin: string; // goal | discovered | user

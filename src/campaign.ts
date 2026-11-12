@@ -4,7 +4,7 @@ import { type BoardRow, type ExclusionKind, type ExclusionRow, type Ledger, comp
 import { type Llm, completeJson } from "./llm/index.ts";
 import { docToText } from "./resume/compose.ts";
 import type { Goal, Job, Pool } from "./schema.ts";
-import { type SearchSource, type SourceSet, searchSources } from "./sources.ts";
+import { type SearchSource, type SourceSet, boardFromUrl, searchSources } from "./sources.ts";
 import { errorMessage, escapeRegex, normalize, sleep } from "./util.ts";
 
 // The search side of a job hunt. Every board and query is a row with a cursor and yield
@@ -91,9 +91,28 @@ export async function gather(ctx: CampaignCtx): Promise<{ requests: number; fres
   return out;
 }
 
+/**
+ * Titles worth fetching in full from boards that charge a request per posting (Workday,
+ * SmartRecruiters): not excluded, and sharing a meaningful word with a target role or search.
+ */
+export function titleFilter(ctx: Pick<CampaignCtx, "goal" | "ledger">): (title: string) => boolean {
+  const { goal } = ctx;
+  const generic = new Set(["and", "of", "the", "for", "to", "a", "in", "i", "ii", "iii", "senior", "junior", "sr", "jr", "associate", "lead", "staff", "specialist", "manager", "coordinator", "assistant"]);
+  const words = new Set(
+    [...goal.targetRoles, ...goal.titleInclude, ...ctx.ledger.queries("active").map((q) => q.query)]
+      .flatMap((t) => normalize(t).split(" "))
+      .filter((w) => w.length > 2 && !generic.has(w)),
+  );
+  return (title: string) => {
+    if (goal.titleExclude.some((t) => phrase(t).test(normalize(title)))) return false;
+    if (goal.titleInclude.length && !goal.titleInclude.some((t) => phrase(t).test(normalize(title)))) return false;
+    return !words.size || normalize(title).split(" ").some((w) => words.has(w));
+  };
+}
+
 async function sweepBoard(ctx: CampaignCtx, b: BoardRow): Promise<{ fresh: number; seen: number }> {
   try {
-    const jobs = await ctx.sources.sweep(b.ats, b.token, b.company);
+    const jobs = await ctx.sources.sweep(b.ats, b.token, b.company, titleFilter(ctx));
     const r = ctx.ledger.addJobs(jobs, `b:${b.ats}:${b.token}`);
     ctx.ledger.boardSwept(b, r);
     await sleep(POLITE_DELAY_MS);
@@ -249,13 +268,21 @@ export function applyPlan(ctx: CampaignCtx, plan: Plan): string[] {
 }
 
 /** Looks up job boards for companies that produced a match, plus ones the planner named. */
-export async function discoverBoards(ctx: CampaignCtx, fromMatches: string[]): Promise<string[]> {
+export async function discoverBoards(ctx: CampaignCtx, fromMatches: string[], fromJobs: Pick<Job, "company" | "url" | "applyUrl">[] = []): Promise<string[]> {
   const { ledger, sources, cfg } = ctx;
   if (!cfg.campaign.discoverBoards) return [];
+  const found: string[] = [];
+  // An aggregator that links straight to the employer's board names the board: no guessing needed.
+  for (const j of fromJobs) {
+    const board = boardFromUrl(j.applyUrl) ?? boardFromUrl(j.url);
+    if (board && ledger.addBoard(board.ats, board.token, j.company, "discovered")) {
+      ledger.setProbe(j.company, `${board.ats}:${board.token}`);
+      found.push(`${j.company} (${board.ats}:${board.token})`);
+    }
+  }
   const pending: string[] = JSON.parse(ledger.meta("pendingCompanies") ?? "[]");
   const known = new Set(ledger.boards().map((b) => companyKey(b.company)));
   const candidates = [...new Set([...fromMatches, ...pending])].filter((c) => !known.has(companyKey(c)) && ledger.probe(c) === undefined);
-  const found: string[] = [];
   const tried: string[] = [];
   for (const company of candidates.slice(0, cfg.campaign.maxProbesPerRun)) {
     tried.push(company);

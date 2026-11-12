@@ -50,6 +50,7 @@ export async function fillForm(page: Page, resolutions: Resolution[]): Promise<s
 export type SubmitOutcome = "submitted" | "unconfirmed" | "failed" | "blocked";
 
 const CONFIRM = /thank(s| you)[^.]{0,40}(appl|submit|interest)|application (has been |was )?(received|submitted|sent)|we('ve| have) received your application|successfully (submitted|applied)/i;
+const CONFIRM_URL = /\/(thank-?you|thanks|confirmation|confirmed|success|submitted|application-submitted)/i;
 const CHALLENGE = 'iframe[src*="recaptcha"][src*="bframe"], iframe[src*="hcaptcha"], iframe[src*="challenges.cloudflare"], iframe[title*="challenge" i]';
 
 /** Clicks submit once and reports what the page did. Never retries, never works around a CAPTCHA. */
@@ -64,8 +65,16 @@ export async function submitForm(page: Page): Promise<{ outcome: SubmitOutcome; 
   await Promise.race([page.waitForLoadState("networkidle", { timeout: 20_000 }).catch(() => {}), page.waitForTimeout(20_000)]);
   await page.waitForTimeout(1500);
 
-  const body = (await page.locator("body").innerText().catch(() => "")) ?? "";
-  if (CONFIRM.test(body)) return { outcome: "submitted", detail: "confirmation page recognized" };
+  // Some confirmations render late or after a redirect: read the page up to three times.
+  let body = "";
+  for (let i = 0; i < 3; i++) {
+    body = (await page.locator("body").innerText().catch(() => "")) ?? "";
+    if (CONFIRM.test(body)) return { outcome: "submitted", detail: "confirmation page recognized" };
+    if (page.url() !== before && CONFIRM_URL.test(new URL(page.url()).pathname)) {
+      return { outcome: "submitted", detail: `the site moved to a confirmation page (${page.url()})` };
+    }
+    await page.waitForTimeout(2500);
+  }
   for (const frame of await page.locator(CHALLENGE).all()) {
     if (await frame.isVisible().catch(() => false)) return { outcome: "blocked", detail: "the site asked for a human verification challenge" };
   }
