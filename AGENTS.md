@@ -17,23 +17,9 @@ Open-source, provider-agnostic job application agent: a TypeScript CLI on Node 2
 - **Statistics decide, the model proposes.** Verdicts on tracks (`trackStats` in `src/strategy.ts`) are computed against the cited benchmarks in `src/benchmarks.ts`. The strategist cannot retire or cement against them (`applyReview`). Change a benchmark only with a cited source.
 - **Personal data stays out of the repo.** The workspace is `~/.resumetron`. Tests and examples use the fictional pool in `examples/`.
 
-## Session start
+## Private state
 
-- Read `ai_state/CURRENT.md` and `ai_state/CONSTRAINTS.md` when they exist. They are private (gitignored), so a public clone won't have them; skip them there.
-- Read `docs/spec/PRODUCT.md` when choosing what to work on, if present: the goal line in `CURRENT.md` names which of its stories the work is for.
-- Heading-scan `ai_state/TECH_DECISIONS.md` before changing an established design.
-- For history, use git (`git log --oneline -- <path>`, `git log -S "<string>"`). Do not eagerly read full specs or docs at startup.
-- The business layer, if this repo sits inside the owner's workspace, is `../../ops/`. Read `../../ops/STATUS.md` for framing; do not edit it unless asked.
-
-## Specs
-
-`docs/spec/README.md` defines the spec system. When building or changing a feature, read `PRODUCT.md`, `SYSTEM.md`, and the area spec section that owns the feature's `FEATURES.md` row. Build the row's recorded MVP form in full. Do not change a row's Scope or MVP form, an invariant, or a hypothesis: propose the change and keep building what the spec says. Cite feature IDs in commit messages (`feat(forms): ... [FRM-03]`). Only the owner marks a row `accepted`.
-
-## State
-
-The state files are specified in `ai_state/README.md`. Update them only when something a fresh session needs has changed: `CURRENT.md` when the objective, what is true now, next actions, or blockers change; `CONSTRAINTS.md` when a protected record or never-repeat rule is added or lifted; `TECH_DECISIONS.md` when a durable decision is made or superseded. Do not create other state files.
-
-Public vs private: `ai_state/README.md`, `ai_state/TECH_DECISIONS.md`, and `docs/spec/README.md` are tracked and public. Every other file under `ai_state/` and `docs/spec/` is gitignored and stays local. Never put personal data, real employers or applications, or business plans in a tracked file.
+`ai_state/` and `docs/` (including the product spec in `docs/spec/`) are private: gitignored, kept only on the owner's machine, absent from public clones. If `ai_state/` exists, read `ai_state/CURRENT.md` and `ai_state/CONSTRAINTS.md` before starting work, and follow them. Never put personal data, real employers or applications, or business plans in a tracked file.
 
 ## Working here
 
