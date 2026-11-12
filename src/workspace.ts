@@ -132,6 +132,13 @@ strategy:
 #   passwordEnv: RESUMETRON_EMAIL_PASSWORD
 #   send: true                 # still follows submit: review | auto
 
+# Workday: most employers need an account on their own Workday site. Put a password
+# just for these accounts in an environment variable; it's never written anywhere.
+# workday:
+#   passwordEnv: RESUMETRON_WORKDAY_PASSWORD
+#   createAccounts: false      # true registers where signing in fails; otherwise apply --create-account
+#   verifyWaitSeconds: 180     # waits for the verification email (needs email: above)
+
 browser:
   headless: true
 `;

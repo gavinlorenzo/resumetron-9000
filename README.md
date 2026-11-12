@@ -107,6 +107,18 @@ resumetron run --mode efficiency
 
 Each posting is matched to the best standard by title and keyword overlap, and gets the template cover letter. Any question your answer bank can't cover waits for you, unless you set `efficiency.answerQuestionsWithLlm: true`.
 
+## Workday
+
+Workday applications are a wizard of four to eight pages behind an account gate, and every employer runs its own Workday site with its own accounts. Resumetron:
+
+- **Goes in as you would.** It opens the posting, chooses "Apply Manually" (never Workday's resume autofill, which invents field values from the PDF), and takes the guest route where an employer offers one. Otherwise it signs in, always before ever registering, so it never makes a second account.
+- **Registers only when you say so.** Set the password once in an environment variable (`RESUMETRON_WORKDAY_PASSWORD`; it's never written to a file or log). Accounts are created only with `apply <id> --create-account`, or `workday.createAccounts: true` in the config. The account email is your pool's, unless `workday.email` says otherwise. Where a site states a longer minimum password, the same password is repeated to that length, so it can sign in again next time. Every account it creates is recorded in the journal.
+- **Verifies by email, if email is set up.** It waits up to `workday.verifyWaitSeconds` for Workday's verification email and opens only https links on Workday's own domains.
+- **Fills page by page.** Each page's questions go through the same rules as any form: answers from your pool and `answers.yaml`, model-written answers only for open-ended text, and personal or legal questions never answered by a model. The resume is uploaded once. A page with a question it can't answer stops the walk there and comes to your queue. A page Workday won't save shows you the questions Workday says are still missing.
+- **Reads the Review page back before submitting.** If Review doesn't show what was answered (a saved draft can carry old values), it stops for you. Submitting is the guarded path described below: `submitted` only on a recognizable confirmation.
+
+In review mode a run only checks that the first page is answerable, saving nothing on the employer's site. `apply` does the walk and submits. `apply --handoff` walks to Review in a visible browser and leaves Submit to you.
+
 ## Submitting
 
 `submit: review` (the default) prepares everything and fills the form, takes a screenshot, and stops. Then you work the queue:
@@ -151,7 +163,8 @@ Sources are official public APIs only:
 | Source | Key needed | Coverage | Applying |
 |---|---|---|---|
 | Greenhouse, Lever, Ashby boards | none | one employer's every opening | filled automatically |
-| Workday, SmartRecruiters, Workable, Recruitee boards | none | one employer's openings (Workday and SmartRecruiters: titles matching your goal, up to 40 per read) | packet prepared; `apply --handoff` fills what it can for you to finish |
+| Workday boards | none | one employer's openings matching your goal's titles, up to 40 per read | filled page by page and submitted; see [Workday](#workday) |
+| SmartRecruiters, Workable, Recruitee boards | none | one employer's openings (SmartRecruiters: titles matching your goal, up to 40 per read) | packet prepared; `apply --handoff` fills what it can for you to finish |
 | Himalayas, Remotive | none | remote roles, keyword search | packet prepared; often upgraded via board discovery |
 | USAJOBS | free API key | US federal jobs | packet prepared; you finish on USAJOBS |
 | Adzuna | free app ID and key | broad keyword search across most job sites | packet prepared; often upgraded via board discovery |
