@@ -20,7 +20,11 @@ A resume agent is only useful if what it sends is true. The Resumetron is built 
 - **Some questions are never answered by the model:** work authorization, sponsorship, salary, demographics, criminal history, relocation, start dates, and anything that asks you to agree, certify, or acknowledge. Neither are multiple-choice questions in general. Those answers come from `answers.yaml`, which only you write, or the application waits for you. Answer once and it's remembered.
 - **Job postings are treated as untrusted text.** The model is told so, gets no tools, and can only return data the software validates.
 
-## Quick start
+## Getting started: just talk to it
+
+The easiest way in is a conversation. With [Claude Code](https://claude.com/claude-code), run `/resumetron` from this repo (or install the skill for every folder: `ln -s "$PWD/.claude/skills/resumetron" ~/.claude/skills/resumetron`). It installs the CLI, builds your CV pool with you, talks through what you want and what you should know (expectations, quotas, job sources, email tracking), agrees an opening strategy with you, writes your workspace files, previews a tailored packet, and then starts applying with you. Come back to `/resumetron` any time to check in on the campaign. The skill is plain instructions in [.claude/skills/resumetron/SKILL.md](.claude/skills/resumetron/SKILL.md), so any agent that can run shell commands can follow it.
+
+## Quick start (by hand)
 
 Requires Node 22.18+.
 

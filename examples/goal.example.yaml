@@ -15,4 +15,17 @@ companies:
 searches:
   - { query: policy analyst, location: Illinois }
 blockedCompanies: []
-notes: ""
+notes: "Lead with policy research, where the thesis and internship are strongest; test legislative staff roles alongside it."
+# Optional opening strategy. The first run starts these tracks as written; after that,
+# the weekly review revises them. Leave it out and the first run drafts its own.
+tracks:
+  - name: Municipal policy research
+    hypothesis: Entry-level analyst roles in city and county government, where the municipal internship is direct experience.
+    roles: [Policy Analyst, Research Analyst]
+    queries: [policy analyst, research analyst, budget analyst]
+    employers: [City of Chicago]
+  - name: Legislative staff
+    hypothesis: Legislative aide roles, building on briefing and stakeholder work.
+    roles: [Legislative Aide, Legislative Assistant]
+    queries: [legislative aide, legislative assistant]
+    employers: []

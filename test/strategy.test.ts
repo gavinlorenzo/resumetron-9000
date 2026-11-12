@@ -7,8 +7,8 @@ import { exposure } from "../src/benchmarks.ts";
 import { Config } from "../src/config.ts";
 import { Ledger } from "../src/ledger.ts";
 import { Goal, type Job } from "../src/schema.ts";
-import { allocate, applyReview, slots, trackStats } from "../src/strategy.ts";
-import { examplePool } from "./helpers.ts";
+import { allocate, applyReview, maybeReview, slots, trackStats } from "../src/strategy.ts";
+import { examplePool, mockLlm } from "./helpers.ts";
 
 const dirs: string[] = [];
 const ledgers: Ledger[] = [];
@@ -116,4 +116,27 @@ test("the strategist can refine freely, but retiring and cementing need the stat
   assert.ok(out.some((c) => c.startsWith('declined retiring "young"')));
   assert.ok(out.some((c) => c.startsWith('declined cementing "young"')));
   assert.deepEqual(JSON.parse(ledger.meta("pendingCompanies")!), ["Acme"]);
+});
+
+test("tracks agreed in setup start as written, with no model call", async () => {
+  const { root, ledger } = fresh();
+  const cfg = Config.parse({ provider: { type: "command", command: "none" } });
+  const pool = examplePool();
+  const llm = mockLlm(pool);
+  const goal = Goal.parse({
+    summary: "s",
+    tracks: [
+      { name: "Legislative staff", hypothesis: "state capitol internship", roles: ["Legislative Aide"], queries: ["legislative aide"], employers: ["Illinois General Assembly"] },
+      { name: "Policy research", hypothesis: "thesis research", queries: ["policy analyst"] },
+    ],
+  });
+  const memo = await maybeReview({ cfg, goal, pool, ledger, llm, root, log: () => {} });
+  assert.equal(llm.calls.length, 0);
+  assert.deepEqual(ledger.tracks().map((t) => [t.name, t.status]), [["Legislative staff", "active"], ["Policy research", "active"]]);
+  assert.ok(ledger.queries("active").some((q) => q.query === "legislative aide"));
+  assert.match(String(memo), /strategy/);
+  // Read once: with tracks live, a later call is a no-op until the weekly review is due.
+  ledger.setMeta("lastReview", new Date().toISOString());
+  assert.equal(await maybeReview({ cfg, goal, pool, ledger, llm, root, log: () => {} }), null);
+  assert.equal(ledger.tracks().length, 2);
 });

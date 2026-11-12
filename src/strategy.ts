@@ -6,7 +6,7 @@ import type { Config } from "./config.ts";
 import type { Ledger, TrackRow } from "./ledger.ts";
 import { type Llm, completeJson } from "./llm/index.ts";
 import { docToText } from "./resume/compose.ts";
-import type { Goal, Pool } from "./schema.ts";
+import { type Goal, type Pool, TrackSeed } from "./schema.ts";
 import { searchSources } from "./sources.ts";
 import { type Posterior, probBelow, thompsonShares } from "./stats.ts";
 
@@ -129,13 +129,7 @@ export function slots(shares: Map<number, number>, room: number): Map<number, nu
 
 // ---------------- the hypothesis loop ----------------
 
-const NewTrack = z.object({
-  name: z.string(),
-  hypothesis: z.string(),
-  roles: z.array(z.string()).default([]),
-  queries: z.array(z.string()).default([]),
-  employers: z.array(z.string()).default([]),
-});
+const NewTrack = TrackSeed;
 
 const Review = z.object({
   memo: z.string(),
@@ -187,7 +181,13 @@ export async function maybeReview(ctx: StrategyCtx, force = false): Promise<stri
 }
 
 async function bootstrap(ctx: StrategyCtx): Promise<string> {
-  const { ledger, goal } = ctx;
+  const { goal } = ctx;
+  if (goal.tracks.length) {
+    // Agreed with the job seeker up front: start these as written, no model call.
+    const lines = goal.tracks.slice(0, ctx.cfg.strategy.maxTracks).map((t) => createTrack(ctx, t, "active"));
+    const notes = goal.notes ? `\n\n${goal.notes}` : "";
+    return writeMemo(ctx, `# Opening strategy\n\nThe tracks you agreed on in setup, from goal.yaml.${notes}\n\n## Tracks\n\n${lines.join("\n")}\n`);
+  }
   const r = await completeJson(
     ctx.llm,
     {

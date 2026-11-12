@@ -94,6 +94,18 @@ export const CompanyBoard = z.object({
   notes: z.string().optional(),
 });
 
+/** One opening bet about where interviews will come from. See src/strategy.ts. */
+export const TrackSeed = z.object({
+  name: z.string(),
+  /** The bet, and what in their background makes them competitive there. */
+  hypothesis: z.string(),
+  roles: z.array(z.string()).default([]),
+  /** 1-4 words each, as typed into a job board. */
+  queries: z.array(z.string()).default([]),
+  employers: z.array(z.string()).default([]),
+});
+export type TrackSeed = z.infer<typeof TrackSeed>;
+
 export const Goal = z.object({
   summary: z.string().default(""),
   /**
@@ -114,6 +126,12 @@ export const Goal = z.object({
   searches: z.array(z.object({ query: z.string(), location: z.string().optional() })).default([]),
   blockedCompanies: z.array(z.string()).default([]),
   notes: z.string().default(""),
+  /**
+   * The opening strategy, when it was worked out with the job seeker (the /resumetron skill
+   * writes these). The first run starts these tracks as written instead of drafting its own.
+   * Read only once: after that the ledger owns the tracks and the weekly review revises them.
+   */
+  tracks: z.array(TrackSeed).default([]),
 });
 export type Goal = z.infer<typeof Goal>;
 
