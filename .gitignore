@@ -15,3 +15,12 @@ ledger.db*
 *.pdf
 stories.yaml
 Connections.csv
+
+# Private working state, product intent and evidence: kept on the owner's machine, never
+# published. They can name real employers and applications, and hold the hosted
+# product's plans. Only the rules (READMEs) and technical decisions are public.
+/ai_state/*
+!/ai_state/README.md
+!/ai_state/TECH_DECISIONS.md
+/docs/spec/*
+!/docs/spec/README.md
