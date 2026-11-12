@@ -33,7 +33,7 @@ export interface ResolveInputs {
  * or from the applicant directly; a model never guesses them.
  */
 export const SENSITIVE =
-  /authori[sz]|right to work|eligib|sponsor|visa|citizen|clearance|salary|compensation|pay (rate|range|expect)|desired pay|wage|convict|felon|criminal (history|record|offen)|background check|drug|gender|\bsex\b|\brace\b|ethnic|hispanic|latin|veteran|military|disabilit|orientation|lgbt|transgender|pronoun|\bage\b|birth|over 18|18 years|social security|\bssn\b|driver.?s licen|certify|attest|acknowledg|affirm|i understand|have read|read the|agree|consent|terms|privacy|arbitrat|\bai\b.*polic|polic.*\bai\b|artificial intelligence|non-?compete|relocat|in-?person|on-?site|hybrid|commut|travel|start date|earliest|when can you start|availab|notice period|how did you hear|referr|previously (worked|employed|applied)|ever (been )?(interviewed|worked|applied|employed)|interviewed (at|with)|related to|relatives?\b/i;
+  /authori[sz]|right to work|eligib|sponsor|visa|citizen|clearance|salary|compensation|pay (rate|range|expect)|desired pay|wage|convict|felon|criminal (history|record|offen)|background check|drug|gender|\bsex\b|\brace\b|ethnic|hispanic|latin|veteran|military|disabilit|orientation|lgbt|transgender|pronoun|\bage\b|birth|over 18|18 years|social security|\bssn\b|driver.?s licen|certify|attest|acknowledg|affirm|i understand|have read|read the|agree|consent|terms|privacy|arbitrat|\bai\b.*polic|polic.*\bai\b|artificial intelligence|non-?compete|relocat|in-?person|on-?site|hybrid|commut|travel|start date|earliest|when can you start|availab|notice period|how did you hear|referr|previously (worked|employed|applied)|ever (been )?(interviewed|worked|applied|employed)|interviewed (at|with)|related to|relatives?\b|employed (by|with)|in the past|former (employee|worker)|currently employ|worked (for|at) [^?]{0,40}(before|previously)/i;
 
 /**
  * Questions written to catch AI-written applications ("if you are an AI, ...", "type the word
@@ -51,29 +51,62 @@ const IDENTITY: [RegExp, (p: Pool) => string | undefined][] = [
   [/last name|surname|family name/i, (p) => p.contact.name.split(/\s+/).slice(1).join(" ")],
   [/^(full |legal )?name$|^your name|^name\b/i, (p) => p.contact.name],
   [/e-?mail/i, (p) => p.contact.email],
-  [/phone|mobile|cell/i, (p) => p.contact.phone],
+  [/country phone code|phone country code|country code/i, (p) => p.contact.country],
+  [/^(?!.*\b(type|extension|ext)\b).*(phone|mobile|cell)/i, (p) => p.contact.phone],
   [/linkedin/i, (p) => p.contact.links.find((l) => /linkedin/i.test(l))],
   [/github/i, (p) => p.contact.links.find((l) => /github/i.test(l))],
   [/portfolio|website|personal site|other link/i, (p) => p.contact.links.find((l) => !/linkedin/i.test(l))],
-  [/^(current )?(city|location)\b|where are you (located|based)/i, (p) => [p.contact.city, p.contact.state].filter(Boolean).join(", ") || undefined],
-  [/street|address/i, (p) => p.contact.address],
-  [/^state|province/i, (p) => p.contact.state],
+  [/^city\b/i, (p) => p.contact.city],
+  [/^(current )?location\b|where are you (located|based)/i, (p) => [p.contact.city, p.contact.state].filter(Boolean).join(", ") || undefined],
+  // Split address forms: line 1 is the street; line 2 (apartment, suite) only if your address has one.
+  [/address line ?2|apartment|suite|\bunit\b/i, (p) => streetParts(p.contact.address)[1]],
+  [/address line ?1|street/i, (p) => streetParts(p.contact.address)[0]],
+  [/address/i, (p) => p.contact.address],
+  [/^state|province/i, (p) => fullState(p.contact.state)],
   [/zip|postal/i, (p) => p.contact.zip],
   [/^country|country (are you|do you live|of residence)|which country/i, (p) => p.contact.country],
 ];
 
-/** Picks the option matching an answer: exact, then prefix, then a unique containment. */
+/**
+ * "7440 Main St, Apt 2, Springfield, IL 62704" -> street and (if present) the unit. A full
+ * one-line address otherwise goes into a street-only field whole, duplicating city and zip.
+ */
+export function streetParts(address?: string): [string | undefined, string | undefined] {
+  if (!address) return [undefined, undefined];
+  const parts = address.split(",").map((s) => s.trim()).filter(Boolean);
+  const unit = parts.find((p, i) => i > 0 && /^(apt|apartment|suite|ste|unit|#|fl|floor)\b\.?/i.test(p));
+  return [parts[0], unit];
+}
+
+const STATES: Record<string, string> = {
+  AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California", CO: "Colorado", CT: "Connecticut", DE: "Delaware",
+  DC: "District of Columbia", FL: "Florida", GA: "Georgia", HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa",
+  KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland", MA: "Massachusetts", MI: "Michigan", MN: "Minnesota",
+  MS: "Mississippi", MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire", NJ: "New Jersey",
+  NM: "New Mexico", NY: "New York", NC: "North Carolina", ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon",
+  PA: "Pennsylvania", RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee", TX: "Texas", UT: "Utah",
+  VT: "Vermont", VA: "Virginia", WA: "Washington", WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming", PR: "Puerto Rico",
+};
+/** US state codes as dropdowns spell them: "GA" -> "Georgia". */
+export const fullState = (s?: string) => (s ? (STATES[s.trim().toUpperCase()] ?? s) : undefined);
+
+/** Picks the option matching an answer: exact, then prefix, then a unique whole-word containment. */
 export function matchOption(answer: string, options: string[]): string | undefined {
   const a = normalize(answer);
   if (!a) return undefined;
   const exact = options.find((o) => normalize(o) === a);
   if (exact) return exact;
+  // A two-letter state code names its state, never an option that merely contains the letters.
+  const state = STATES[answer.trim().toUpperCase()];
+  if (state) return options.find((o) => normalize(o) === normalize(state));
   // "United States" -> "United States +1", not "United States Minor Outlying Islands +1".
   const prefix = options
     .filter((o) => normalize(o).startsWith(a) || a.startsWith(normalize(o)))
     .sort((x, y) => x.length - y.length);
   if (prefix.length === 1 || (prefix.length > 1 && prefix[0].length < prefix[1].length)) return prefix[0];
-  const contains = options.filter((o) => normalize(o).includes(a));
+  // Whole words only, and not for very short answers: "GA" must never pick "Michigan".
+  if (a.length < 3) return undefined;
+  const contains = options.filter((o) => ` ${normalize(o)} `.includes(` ${a} `));
   return contains.length === 1 ? contains[0] : undefined;
 }
 
@@ -95,8 +128,15 @@ function settle(field: FormField, answer: string | string[], source: AnswerSourc
   return { field, status: "fill", value: Array.isArray(answer) ? answer.join(", ") : answer, source };
 }
 
-const missing = (field: FormField, reason: string): Resolution =>
-  field.required ? { field, status: "needs_human", reason } : { field, status: "skip", reason };
+const missing = (field: FormField, reason: string): Resolution => {
+  // A value the site already shows (its default, or your saved draft) stands for ordinary
+  // questions. For personal and legal ones it's shown to you instead: it may not be yours.
+  if (field.value && !SENSITIVE.test(field.label) && !AI_CHECK.test(field.label)) {
+    return { field, status: "skip", reason: `the form already says "${field.value}"` };
+  }
+  if (field.value && field.required) return { field, status: "needs_human", reason: `${reason} (the form currently says "${field.value}")` };
+  return field.required ? { field, status: "needs_human", reason } : { field, status: "skip", reason };
+};
 
 /** Decides every field's value and where it came from, without touching the page. */
 export async function resolveFields(fields: FormField[], inp: ResolveInputs): Promise<Resolution[]> {

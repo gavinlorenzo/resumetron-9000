@@ -3,7 +3,9 @@ import { join } from "node:path";
 import type { BrowserHost } from "./browser.ts";
 import type { Config } from "./config.ts";
 import { extractFields } from "./forms/extract.ts";
-import { fillForm, submitForm } from "./forms/fill.ts";
+import type { Page } from "playwright";
+import { fillForm, readOutcome, submitForm } from "./forms/fill.ts";
+import { SEL, advance, attachResume, enterWorkday, isWorkdayUrl, pressSubmit, recover, redact, requiredErrors, reviewOmissions, stepName, verificationLinkIn } from "./forms/workday.ts";
 import { type Resolution, resolveFields } from "./forms/resolve.ts";
 import { type Ledger, type JobRow, screenOf } from "./ledger.ts";
 import { checkGates } from "./gates.ts";
@@ -453,10 +455,19 @@ export async function processForm(
   ctx: Ctx,
   job: Job,
   packet: Packet,
-  opts: { submit: boolean; mode: Config["mode"]; headless?: boolean; keepOpen?: boolean },
+  opts: { submit: boolean; mode: Config["mode"]; headless?: boolean; keepOpen?: boolean; createAccount?: boolean },
 ): Promise<FormResult> {
   // A handoff fills what it can on any site, since you finish and submit it yourself.
   const assisted = opts.keepOpen && opts.headless === false && !opts.submit;
+  if (isWorkdayUrl(job.applyUrl)) {
+    const page = await ctx.browser.newPage(opts.headless);
+    try {
+      await page.goto(job.applyUrl.replace(/\/apply\/?$/, ""), { waitUntil: "domcontentloaded", timeout: ctx.cfg.browser.navigationTimeoutMs });
+      return await processWorkday(ctx, page, job, packet, opts.submit ? "submit" : assisted ? "walk" : "check", Boolean(opts.createAccount));
+    } finally {
+      if (!opts.keepOpen) await page.close().catch(() => {});
+    }
+  }
   if (!job.autoApplicable && !assisted) {
     if (ctx.cfg.email?.send && applyByEmailAddress(job)) return emailApplication(ctx, job, packet, opts.submit);
     return { status: "needs_human", detail: `finish on ${new URL(job.applyUrl).host} (resumetron apply ${job.id.slice(0, 8)} --handoff fills what it can); your documents are in ${packet.dir}` };
@@ -495,15 +506,134 @@ export async function processForm(
     if (!opts.submit) return { status: "ready", detail: `form pre-filled; ${resolutions.filter((r) => r.source === "llm").length} model-written answer(s) to review` };
 
     const sent = await submitForm(page);
-    // Proof of what the site said, kept with the packet.
-    await page.screenshot({ path: join(packet.dir, "after-submit.png"), fullPage: true }).catch(() => {});
-    const proof = await page.locator("body").innerText().catch(() => "");
-    writeFileSync(join(packet.dir, "after-submit.txt"), `${new Date().toISOString()}\n${page.url()}\n${sent.outcome}: ${sent.detail}\n\n${proof.slice(0, 20_000)}`);
+    await keepProof(page, packet, sent);
     if (sent.outcome === "blocked") return { status: "needs_human", detail: `${sent.detail}; run \`resumetron apply ${job.id} --handoff\`` };
     return { status: sent.outcome, detail: sent.detail };
   } finally {
     if (!opts.keepOpen) await page.close().catch(() => {});
   }
+}
+
+/**
+ * A Workday application. "check" (a review-mode run) gets to the first page and resolves its
+ * fields without saving anything; "walk" (a handoff) fills and saves each page up to Review and
+ * leaves it to you; "submit" walks, checks the Review page says back what you answered, and
+ * submits. Any question it can't answer stops it on that page.
+ */
+async function processWorkday(ctx: Ctx, page: Page, job: Job, packet: Packet, how: "check" | "walk" | "submit", createAccount: boolean): Promise<FormResult> {
+  const w = ctx.cfg.workday;
+  const password = process.env[w.passwordEnv];
+  const email = w.email ?? ctx.pool.contact.email;
+  const account = password && email ? { email, password } : undefined;
+  const handoff = ` (\`resumetron apply ${job.id.slice(0, 8)} --handoff\` to do it in a browser)`;
+  const entry = await enterWorkday(page, {
+    account,
+    allowCreate: createAccount || w.createAccounts,
+    awaitLink: ctx.mailbox ? workdayLinkReader(ctx.mailbox, w.verifyWaitSeconds) : undefined,
+    onCreated: (tenant) => ctx.ledger.note("workday", `created a Workday account on ${tenant} for ${account?.email}`),
+  });
+  const say = (s: string) => (password ? redact(s, password) : s);
+  if (entry.reached === "closed") return { status: "failed", detail: `closed: ${entry.detail}` };
+  if (entry.reached !== "form") {
+    await page.screenshot({ path: join(packet.dir, "workday-entry.png") }).catch(() => {});
+    return { status: "needs_human", detail: say(entry.detail) + handoff };
+  }
+  ctx.log(`  workday: ${say(entry.detail)}`);
+
+  const useModel = ctx.cfg.mode === "tailored" || ctx.cfg.efficiency.answerQuestionsWithLlm;
+  const all: Resolution[] = [];
+  const answered: { label: string; value: string }[] = [];
+  let resumeAttached = false;
+  let last = "";
+  let stalls = 0;
+  let pages = 0;
+  for (let i = 0; i < 12; i++) {
+    await recover(page);
+    await page.waitForTimeout(1500);
+    const name = await stepName(page);
+    if (name && name === last) {
+      if (++stalls >= 3) {
+        const missing = requiredErrors(await page.locator("body").innerText().catch(() => ""));
+        writeFields(packet, all);
+        return { status: "needs_human", detail: `Workday's "${name}" page won't save${missing.length ? `: it still wants ${missing.join("; ")}` : ""}${handoff}` };
+      }
+    } else {
+      last = name;
+      stalls = 0;
+      pages++;
+    }
+    if (/\breview\b/i.test(name)) break;
+    if (how !== "check" && !resumeAttached && (await page.locator(SEL.resumeInput).count())) resumeAttached = await attachResume(page, packet.resumePath);
+    const fields = (await extractFields(page)).filter((f) => f.kind !== "file");
+    const resolutions = await resolveFields(fields, {
+      pool: ctx.pool, bank: ctx.bank, job, resumePath: packet.resumePath, coverPath: packet.coverPath, coverText: packet.coverText,
+      resumeText: packet.resumeText, saved: savedAnswers(packet.dir), llm: useModel ? ctx.llm : undefined,
+    });
+    all.push(...resolutions.filter((r) => !all.some((a) => a.field.label === r.field.label)));
+    const unresolved = resolutions.filter((r) => r.status === "needs_human");
+    if (how === "check") {
+      writeFields(packet, all);
+      if (unresolved.length) return { status: "needs_human", detail: `Workday page "${name}": ${unresolved.map((r) => `${r.field.label} (${r.reason})`).join("; ")}` };
+      return { status: "ready", detail: `Workday: ${say(entry.detail)}; page 1 ("${name}") is answerable. \`apply\` fills every page and stops at Review if anything's missing` };
+    }
+    const failed = await fillForm(page, resolutions);
+    for (const r of resolutions) if (r.status === "fill" && r.value !== undefined) answered.push({ label: r.field.label, value: Array.isArray(r.value) ? r.value.join(", ") : String(r.value) });
+    if (unresolved.length || failed.length) {
+      writeFields(packet, all);
+      await page.screenshot({ path: join(packet.dir, "form-filled.png"), fullPage: true }).catch(() => {});
+      const list = [...unresolved.map((r) => `${r.field.label} (${r.reason})`), ...failed.map((l) => `${l} (could not be filled)`)];
+      return { status: "needs_human", detail: `Workday page "${name}": ${list.length} field(s) need you: ${list.join("; ")}` };
+    }
+    if (!(await advance(page))) {
+      if (await page.locator(SEL.next.join(",")).filter({ hasText: /submit/i }).count()) break; // on Review
+      writeFields(packet, all);
+      return { status: "needs_human", detail: `couldn't move past Workday's "${name}" page${handoff}` };
+    }
+  }
+  writeFields(packet, all);
+  await page.screenshot({ path: join(packet.dir, "form-filled.png"), fullPage: true }).catch(() => {});
+  if (!resumeAttached) return { status: "needs_human", detail: `walked ${pages} Workday pages, but the resume upload didn't take${handoff}` };
+  const review = await page.locator("body").innerText().catch(() => "");
+  const omitted = reviewOmissions(review, answered);
+  if (omitted.length) {
+    return { status: "needs_human", detail: `Workday's Review page doesn't show what was answered for: ${omitted.map((o) => `${o.label} ("${o.value}")`).join("; ")}; check it before submitting${handoff}` };
+  }
+  if (how === "walk") return { status: "ready", detail: `filled ${pages} Workday pages; it's at Review for you to submit` };
+
+  const before = page.url();
+  if (!(await pressSubmit(page))) return { status: "needs_human", detail: `reached Review but found no Submit button${handoff}` };
+  const sent = await readOutcome(page, before);
+  await keepProof(page, packet, sent);
+  if (sent.outcome === "blocked") return { status: "needs_human", detail: `${sent.detail}${handoff}` };
+  return { status: sent.outcome, detail: sent.detail };
+}
+
+/** Polls the inbox for Workday's verification email; returns its link, or null when time's up. */
+export function workdayLinkReader(mailbox: Mailbox, waitSeconds: number) {
+  return async (since: Date): Promise<string | null> => {
+    const until = Date.now() + waitSeconds * 1000;
+    let after = 0;
+    while (Date.now() < until) {
+      await sleep(10_000);
+      const heads = await mailbox.fetchHeaders(after, new Date(since.getTime() - 86_400_000), 5000).catch(() => []);
+      if (heads.length) after = Math.max(after, ...heads.map((h) => h.uid));
+      const fresh = heads.filter((h) => new Date(h.date).getTime() >= since.getTime() - 120_000 && (/workday/i.test(h.from) || /verif|activat|confirm/i.test(h.subject)));
+      if (!fresh.length) continue;
+      const bodies = await mailbox.fetchText(fresh.map((h) => h.uid)).catch(() => new Map<number, string>());
+      for (const h of fresh.reverse()) {
+        const link = verificationLinkIn(bodies.get(h.uid) ?? "");
+        if (link) return link;
+      }
+    }
+    return null;
+  };
+}
+
+/** What the site said after submit, kept with the packet as proof. */
+async function keepProof(page: Page, packet: Packet, sent: { outcome: string; detail: string }) {
+  await page.screenshot({ path: join(packet.dir, "after-submit.png"), fullPage: true }).catch(() => {});
+  const proof = await page.locator("body").innerText().catch(() => "");
+  writeFileSync(join(packet.dir, "after-submit.txt"), `${new Date().toISOString()}\n${page.url()}\n${sent.outcome}: ${sent.detail}\n\n${proof.slice(0, 20_000)}`);
 }
 
 function writeFields(packet: Packet, resolutions: Resolution[]): void {

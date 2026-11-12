@@ -159,6 +159,21 @@ export const Config = z.object({
       maxTracks: z.number().default(5),
     })
     .prefault({}),
+  /**
+   * Workday applications. Most employers' Workday sites need an account per employer; the
+   * password comes from an environment variable and is never written anywhere. Accounts are
+   * only ever registered when you allow it (`createAccounts`, or `apply --create-account`).
+   */
+  workday: z
+    .object({
+      passwordEnv: z.string().default("RESUMETRON_WORKDAY_PASSWORD"),
+      /** The account email; defaults to the one in your pool. */
+      email: z.string().optional(),
+      createAccounts: z.boolean().default(false),
+      /** How long to wait for Workday's verification email (needs `email:` set up). */
+      verifyWaitSeconds: z.number().default(180),
+    })
+    .prefault({}),
   browser: z
     .object({
       headless: z.boolean().default(true),

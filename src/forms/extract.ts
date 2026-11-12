@@ -2,7 +2,9 @@ import type { Page } from "playwright";
 
 export type FieldKind =
   | "text" | "email" | "tel" | "url" | "number" | "date" | "textarea"
-  | "select" | "radio" | "checkbox" | "checkbox-group" | "file" | "combobox";
+  | "select" | "radio" | "checkbox" | "checkbox-group" | "file" | "combobox"
+  /** A search-and-pick input (Workday's prompts): type, then choose from what the site offers. */
+  | "prompt";
 
 export interface FormField {
   /** Stable handle written onto the element as data-rt-id. Radio/checkbox groups key options separately. */
@@ -13,6 +15,8 @@ export interface FormField {
   options: string[];
   /** For radio and checkbox groups: option label -> element handle. */
   optionIds?: Record<string, string>;
+  /** What the form already says (a site default or an earlier draft), if anything. */
+  value?: string;
 }
 
 /** Reads the application form on the page into a list of labeled fields. */
@@ -41,8 +45,15 @@ export async function extractFields(page: Page): Promise<FormField[]> {
       );
     };
     const container = (el: Element) =>
-      el.closest(".application-question,.field,.form-group,.form-field,[class*='question'],[class*='Field'],[class*='field'],fieldset,li");
+      el.closest("[data-automation-id^='formField-'],.application-question,.field,.form-group,.form-field,[class*='question'],[class*='Field'],[class*='field'],fieldset,li");
     const questionLabel = (el: Element): string => {
+      // Workday wraps each question in formField-*, whose <label> is the question; its controls'
+      // own aria-labels add the current value ("Country United States of America Required").
+      const wd = el.closest('[data-automation-id^="formField-"]');
+      if (wd) {
+        const t = textOf(wd.querySelector("label,legend"));
+        if (t) return t;
+      }
       const labelledBy = el.getAttribute("aria-labelledby");
       if (labelledBy) {
         const t = labelledBy.split(/\s+/).map((id) => textOf(document.getElementById(id))).join(" ").trim();
@@ -64,6 +75,11 @@ export async function extractFields(page: Page): Promise<FormField[]> {
       return input.placeholder || input.name || "";
     };
     const groupLabel = (el: Element): string => {
+      const wd = el.closest('[data-automation-id^="formField-"]');
+      if (wd) {
+        const t = textOf(wd.querySelector("legend,label"));
+        if (t && t !== textOf(el.closest("label"))) return t;
+      }
       const group = el.closest("fieldset,[role=radiogroup],[role=group]");
       if (group) {
         const legend = group.querySelector("legend");
@@ -93,12 +109,13 @@ export async function extractFields(page: Page): Promise<FormField[]> {
     // Choose the form holding the application: prefer one with a file input, then the largest.
     const forms = [...document.querySelectorAll("form")];
     const score = (f: Element) => f.querySelectorAll("input,select,textarea").length + (f.querySelector("input[type=file]") ? 100 : 0);
-    const scope: Element = forms.sort((a, b) => score(b) - score(a))[0] ?? document.body;
+    const scope: Element =
+      document.querySelector('[data-automation-id="applyFlowPage"]') ?? forms.sort((a, b) => score(b) - score(a))[0] ?? document.body;
 
     const out: any[] = [];
     const groups = new Map<string, any>();
     const seen = new Set<Element>();
-    for (const el of scope.querySelectorAll("input,select,textarea,[role=combobox]")) {
+    for (const el of scope.querySelectorAll('input,select,textarea,[role=combobox],button[aria-haspopup="listbox"]')) {
       if (seen.has(el)) continue;
       seen.add(el);
       const input = el as HTMLInputElement;
@@ -132,19 +149,28 @@ export async function extractFields(page: Page): Promise<FormField[]> {
       }
       if (!visible(el)) continue; // hidden text inputs are honeypots or framework internals
       const raw = questionLabel(el);
-      const isCombo = el.getAttribute("role") === "combobox";
+      const isPrompt = el.getAttribute("data-uxi-widget-type") === "selectinput" || Boolean(el.closest('[data-automation-id="multiselectInputContainer"]'));
+      const isCombo = el.getAttribute("role") === "combobox" || el.tagName === "BUTTON";
       const kind =
         el.tagName === "SELECT" ? "select" :
         el.tagName === "TEXTAREA" ? "textarea" :
+        isPrompt ? "prompt" :
         isCombo ? "combobox" :
         ["email", "tel", "url", "number", "date"].includes(type) ? type : "text";
+      const wrapper = el.closest('[data-automation-id^="formField-"]');
+      const current =
+        kind === "prompt" ? textOf(wrapper?.querySelector('[data-automation-id="selectedItemList"]') ?? null) :
+        el.tagName === "BUTTON" ? (el.textContent ?? "").replace(/\s+/g, " ").trim() :
+        el.tagName === "SELECT" ? ((el as HTMLSelectElement).value ? (el as HTMLSelectElement).selectedOptions[0]?.text.trim() ?? "" : "") :
+        (input.value ?? "").trim();
+      const value = current && !/^(select one|select|choose|--|0 items selected)$/i.test(current) ? current : undefined;
       const options =
         el.tagName === "SELECT"
           ? [...(el as HTMLSelectElement).options]
               .filter((o) => o.value !== "" && !/^(select|choose|--|please select)/i.test(o.text.trim()))
               .map((o) => o.text.trim())
           : [];
-      out.push({ rtId: tag(el), kind, label: clean(raw), required: requiredOf(el, raw), options });
+      out.push({ rtId: tag(el), kind, label: clean(raw), required: requiredOf(el, raw), options, value });
     }
     // A lone checkbox is a yes/no field, not a group.
     for (const f of out) {

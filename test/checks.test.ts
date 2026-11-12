@@ -159,3 +159,51 @@ test("the cover letter reviewer's edits land, and standing lessons reach every p
     assert.ok(llm.calls.some((c) => c.purpose === purpose && String(c.stable).includes("Never lead with the cafe job")), purpose);
   }
 });
+
+test("form answers pick the right option and the right part of an address", async () => {
+  const { matchOption, streetParts, fullState, resolveFields } = await import("../src/forms/resolve.ts");
+  const states = ["Georgia", "Michigan", "Maine", "Washington"];
+  assert.equal(matchOption("GA", states), "Georgia", "a state code is its state");
+  assert.equal(matchOption("ga", ["Michigan", "Virginia"]), undefined, "never a substring");
+  assert.equal(matchOption("United States", ["United States of America", "United States Minor Outlying Islands"]), "United States of America");
+  assert.equal(fullState("ga"), "Georgia");
+  assert.deepEqual(streetParts("7440 Main St, Apt 2, Springfield, IL 62704"), ["7440 Main St", "Apt 2"]);
+  assert.deepEqual(streetParts("7440 Main St, Springfield, IL 62704"), ["7440 Main St", undefined]);
+  const { examplePool } = await import("./helpers.ts");
+  const pool = examplePool();
+  pool.contact.address = "12 Elm St, Springfield, IL 62704";
+  pool.contact.phone = "555-0100";
+  const f = (label: string, kind = "text", value?: string, options: string[] = []) => ({ rtId: label, kind, label, required: true, options, value }) as any;
+  const res = await resolveFields(
+    [f("Address Line 1"), f("Address Line 2"), f("Phone Number"), f("Phone Extension"), f("Phone Device Type", "combobox", "Mobile", ["Mobile", "Home"]), f("Have you been employed by Acme in the past?", "radio", "Yes", ["Yes", "No"])],
+    { pool, bank: { answers: [] }, job: { description: "" } as any, resumePath: "", resumeText: "" },
+  );
+  const by = Object.fromEntries(res.map((r) => [r.field.label, r]));
+  assert.equal(by["Address Line 1"].value, "12 Elm St");
+  assert.equal(by["Address Line 2"].status, "needs_human", "required but you have no unit: asked, not invented");
+  assert.equal(by["Phone Number"].value, "555-0100");
+  assert.notEqual(by["Phone Extension"].value, "555-0100");
+  assert.equal(by["Phone Device Type"].status, "skip", "an ordinary question the site already answered");
+  assert.equal(by["Have you been employed by Acme in the past?"].status, "needs_human", "a prefilled personal question is still yours");
+});
+
+test("Workday pieces: tenants, password minimums, verification links, review read-back", async () => {
+  const W = await import("../src/forms/workday.ts");
+  const { readOutcome } = await import("../src/forms/fill.ts");
+  assert.ok(readOutcome);
+  assert.equal(W.workdayTenant("https://adobe.wd5.myworkdayjobs.com/external/job/x"), "adobe");
+  assert.ok(W.isWorkdayUrl("https://acme.wd1.myworkdayjobs.com/en-US/site/job/x/apply"));
+  assert.ok(!W.isWorkdayUrl("https://myworkdayjobs.com.evil.example/x"));
+  assert.equal(W.statedMinimum("Password Requirements: A minimum of 14 characters, an uppercase character"), 14);
+  assert.equal(W.lengthened("Abc12345!", 14), "Abc12345!Abc12345!");
+  assert.equal(W.verificationLinkIn("Click https://acme.wd5.myworkdayjobs.com/site/activate?token=abc. Thanks"), "https://acme.wd5.myworkdayjobs.com/site/activate?token=abc");
+  assert.equal(W.verificationLinkIn("Click https://evil.example/activate?token=abc"), null);
+  assert.deepEqual(W.requiredErrors("Errors Found The field How Did You Hear About Us? is required and must have a value."), ["How Did You Hear About Us?"]);
+  assert.deepEqual(
+    W.reviewOmissions("My Information How Did You Hear About Us? LinkedIn Country United States of America", [
+      { label: "Source", value: "LinkedIn" }, { label: "Previous", value: "Yes" }, { label: "Phone type", value: "Home Cellular" },
+    ]).map((o) => o.label),
+    ["Phone type"],
+  );
+  assert.equal(W.redact("sign-in refused for hunter2pw", "hunter2pw"), "sign-in refused for [redacted]");
+});

@@ -589,6 +589,7 @@ program
   .description("submit an application you've reviewed")
   .option("--handoff", "open a visible browser with everything filled in; you finish and click submit")
   .option("--force", "submit even though it may already have gone out (status submitted or unconfirmed)")
+  .option("--create-account", "on a Workday site, register an account for you if signing in fails (uses the password in RESUMETRON_WORKDAY_PASSWORD)")
   .action(async (id: string, o) =>
     withCtx(async (ctx) => {
       const row = ctx.ledger.get(id);
@@ -607,7 +608,7 @@ program
       }
       const packet = packetFor(row.packet_dir, ctx.pool.contact.name);
       if (o.handoff) {
-        await processForm(ctx, job, packet, { submit: false, mode: ctx.cfg.mode, headless: false, keepOpen: true });
+        await processForm(ctx, job, packet, { submit: false, mode: ctx.cfg.mode, headless: false, keepOpen: true, createAccount: o.createAccount });
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         const answer = await rl.question("Finish in the browser window. Did you submit it? (y/n) ");
         rl.close();
@@ -616,7 +617,7 @@ program
         log(done ? "Recorded as submitted." : "Left in your queue.");
         return;
       }
-      const result = await processForm(ctx, job, packet, { submit: true, mode: ctx.cfg.mode });
+      const result = await processForm(ctx, job, packet, { submit: true, mode: ctx.cfg.mode, createAccount: o.createAccount });
       ctx.ledger.setStatus(row.id, result.status, { reason: result.detail });
       log(`${result.status}: ${result.detail}`);
     }),
