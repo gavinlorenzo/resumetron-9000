@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import YAML from "yaml";
 import type { z } from "zod";
 import { Config } from "./config.ts";
-import { AnswerBank, Goal, Pool, Standard } from "./schema.ts";
+import { AnswerBank, Goal, Pool, Standard, StoryBank } from "./schema.ts";
 
 export interface Workspace {
   root: string;
@@ -16,6 +16,7 @@ export interface Workspace {
   standards: string;
   applications: string;
   ledger: string;
+  stories: string;
 }
 
 export function workspaceAt(home?: string): Workspace {
@@ -30,6 +31,7 @@ export function workspaceAt(home?: string): Workspace {
     standards: join(root, "standards"),
     applications: join(root, "applications"),
     ledger: join(root, "ledger.db"),
+    stories: join(root, "stories.yaml"),
   };
 }
 
@@ -51,6 +53,8 @@ export const loadPool = (ws: Workspace) => readYaml(ws.pool, Pool, "Run `resumet
 export const loadGoal = (ws: Workspace) => readYaml(ws.goal, Goal, "Run `resumetron interview` first.");
 export const loadAnswers = (ws: Workspace): AnswerBank =>
   existsSync(ws.answers) ? readYaml(ws.answers, AnswerBank, "") : { answers: [] };
+
+export const loadStories = (ws: Workspace): StoryBank => (existsSync(ws.stories) ? readYaml(ws.stories, StoryBank, "") : { stories: [] });
 
 export function loadStandards(ws: Workspace): Standard[] {
   if (!existsSync(ws.standards)) return [];

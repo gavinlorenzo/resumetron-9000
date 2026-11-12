@@ -6,6 +6,11 @@ export const Bullet = z.object({
   id: z.string(),
   text: z.string(),
   tags: z.array(z.string()).default([]),
+  /**
+   * A figure you confirmed for this bullet ("about 40 students a week"), in your own words,
+   * usually from `resumetron strengthen`. Rewordings may use it; the guard treats it as your fact.
+   */
+  metric: z.string().optional(),
 });
 
 export const Role = z.object({
@@ -194,6 +199,24 @@ export const TailorPlan = z.object({
   rationale: z.string().default(""),
 });
 export type TailorPlan = z.infer<typeof TailorPlan>;
+
+// ---- Interview stories: true STAR accounts, drafted from the pool and edited by you. ----
+
+export const Story = z.object({
+  id: z.string(),
+  title: z.string(),
+  /** Question themes it answers: leadership, conflict, failure, initiative... */
+  themes: z.array(z.string()).default([]),
+  /** Pool bullet ids it draws on. */
+  bullets: z.array(z.string()).default([]),
+  situation: z.string(),
+  task: z.string(),
+  action: z.string(),
+  result: z.string(),
+  reflection: z.string().optional(),
+});
+export const StoryBank = z.object({ stories: z.array(Story).default([]) });
+export type StoryBank = z.infer<typeof StoryBank>;
 
 // ---- Reusable resumes for efficiency mode. ----
 

@@ -4,7 +4,11 @@ import { basename, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { BrowserHost } from "./browser.ts";
-import { type ExclusionKind, Ledger, type Outcome } from "./ledger.ts";
+import { type ExclusionKind, Ledger, type Outcome, screenOf } from "./ledger.ts";
+import { quantities } from "./guard.ts";
+import { importConnections, knownAt, networkCompanies } from "./network.ts";
+import { draftFollowup, draftStories, draftThanks, dueFollowups, emailTarget, followupsFor, markSent, prepPack } from "./aftercare.ts";
+import { buildReport, formatRates } from "./report.ts";
 import { SOURCES } from "./benchmarks.ts";
 import { liveMailbox, syncInbox } from "./email.ts";
 import { allocate, latestMemo, maybeReview, trackStats } from "./strategy.ts";
@@ -20,7 +24,7 @@ import { checkLiveness } from "./liveness.ts";
 import { cleanPosting } from "./posting.ts";
 import { errorMessage, htmlToText, safeFileName, shortHash } from "./util.ts";
 import {
-  type Workspace, initWorkspace, loadAnswers, loadConfig, loadGoal, loadPool, loadStandards, workspaceAt, writeYaml,
+  type Workspace, initWorkspace, loadAnswers, loadConfig, loadGoal, loadPool, loadStandards, loadStories, workspaceAt, writeYaml,
 } from "./workspace.ts";
 import { AnswerBank, Goal } from "./schema.ts";
 
@@ -128,6 +132,43 @@ program
     } finally {
       rl.close();
       ledger.close();
+    }
+  });
+
+program
+  .command("strengthen")
+  .description("add real figures to bullets that have none: asks you, never suggests a number")
+  .option("-n <count>", "bullets per session", "12")
+  .action(async (o) => {
+    const w = ws();
+    const pool = loadPool(w);
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    let asked = 0;
+    let saved = 0;
+    try {
+      log("For each bullet: what was the scale or the result, in your own words? A count, a size, a before/after, a frequency.");
+      log("Only what's true and you'd stand behind in an interview. Enter skips one, q stops.\n");
+      outer: for (const s of pool.sections) {
+        if (s.type !== "experience") continue;
+        for (const e of s.entries)
+          for (const r of e.roles)
+            for (const b of r.bullets) {
+              if (b.metric || quantities(b.text).length) continue;
+              if (asked++ >= Number(o.n)) break outer;
+              const a = (await rl.question(`${e.org} | ${r.title}\n  - ${b.text}\n> `)).trim();
+              if (/^q(uit)?$/i.test(a)) break outer;
+              if (!a) continue;
+              b.metric = a;
+              saved++;
+            }
+      }
+      if (saved) {
+        copyFileSync(w.pool, `${w.pool}.bak`);
+        writeYaml(w.pool, pool);
+      }
+      log(`\nSaved ${saved} figure(s) to ${w.pool}. Tailoring can now use them, and the fabrication guard accepts them as yours.`);
+    } finally {
+      rl.close();
     }
   });
 
@@ -507,8 +548,29 @@ program
       const row = ledger.get(id);
       if (!row) throw new Error(`no job ${id}`);
       log(`${row.company} | ${row.title}\n${row.location}\n${row.url}\nstatus: ${row.status}${row.reason ? ` (${row.reason})` : ""}`);
+      const sc = screenOf(row);
+      if (sc.factors) log(`fit ${row.fit}: ${Object.entries(sc.factors).map(([k, v]) => `${k} ${Math.round(v * 100)}`).join(", ")}`);
+      if (sc.strengths?.length) log(`strengths: ${sc.strengths.join("; ")}`);
+      if (sc.gaps?.length) log(`gaps: ${sc.gaps.join("; ")}`);
+      for (const g of sc.gates ?? []) log(`check: ${g}`);
+      for (const w of sc.warnings ?? []) log(`warning: ${w}`);
+      if (row.reposts) log(`reposted ${row.reposts} time(s)`);
+      const known = knownAt(ledger, row.company);
+      if (known.length) log(`people you know there: ${known.map((c) => `${c.name}${c.position ? ` (${c.position})` : ""}`).join("; ")}`);
       if (!row.packet_dir) return;
       log(`packet: ${row.packet_dir}`);
+      const pj = join(row.packet_dir, "packet.json");
+      if (existsSync(pj)) {
+        const p = JSON.parse(readFileSync(pj, "utf8"));
+        const reworded = (p.provenance ?? []).filter((b: any) => b.label === "reworded").length;
+        if (p.provenance) log(`bullets: ${p.provenance.length} total, ${reworded} reworded (checked), ${p.guard?.revertedBullets?.length ?? 0} reverted to your wording`);
+        if (p.readability && !p.readability.ok) log(`resume parsing: ${p.readability.problems.join("; ")}`);
+        if (p.keywords) {
+          const k = p.keywords;
+          if (k.inPool.length) log(`in your pool but not on this resume: ${k.inPool.join(", ")}`);
+          if (k.gaps.length) log(`posting terms you haven't claimed (never added for you): ${k.gaps.join(", ")}`);
+        }
+      }
       const fields = join(row.packet_dir, "fields.json");
       if (existsSync(fields)) {
         for (const f of JSON.parse(readFileSync(fields, "utf8")).fields) {
@@ -603,6 +665,127 @@ program
       if (!row) throw new Error(`no job ${id}`);
       ledger.setStatus(row.id, "skipped", { reason: "skipped by you" });
       log(`Skipped ${row.company} | ${row.title}`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("connections")
+  .description("import your LinkedIn connections export, or list companies where you know people")
+  .argument("[csv]", "Connections.csv from LinkedIn's data export")
+  .action((csv?: string) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      if (csv) log(`Imported ${importConnections(ledger, csv)} connections. Jobs at their companies now show who you know.`);
+      const top = networkCompanies(ledger, 25);
+      if (!top.length) return log("No connections imported yet. LinkedIn: Settings > Data privacy > Get a copy of your data > Connections.");
+      log("Where you know the most people:");
+      for (const c of top) log(`  ${String(c.n).padStart(3)}  ${c.company}`);
+    } finally {
+      ledger.close();
+    }
+  });
+
+program
+  .command("followups")
+  .description("applications that have gone quiet: drafts a polite follow-up for each (nothing is sent unless you say so)")
+  .option("--send <id>", "send the drafted follow-up for an email application, in the same thread")
+  .action(async (o) =>
+    withCtx(async (ctx) => {
+      const { ledger, cfg } = ctx;
+      if (o.send) {
+        const row = ledger.get(o.send);
+        if (!row) throw new Error(`no job ${o.send}`);
+        const target = emailTarget(row);
+        const last = followupsFor(ledger, row.id).filter((f) => !f.sent_at).pop();
+        if (!target || !last) throw new Error("only email applications with an unsent follow-up draft can be sent from here; send others yourself");
+        if (!ctx.mailbox) throw new Error("email isn't configured");
+        const body = readFileSync(last.path, "utf8").replace(/^(To|Subject):.*\n/gm, "").replace(/^#.*$/gm, "").trim();
+        await ctx.mailbox.send({ to: target.to, subject: `Re: ${target.subject}`, text: body, attachments: [] });
+        markSent(ledger, row.id, last.n);
+        return log(`Sent follow-up ${last.n} to ${target.to}.`);
+      }
+      const due = dueFollowups(ledger, cfg.followup);
+      if (!due.length) return log(`Nothing due. Follow-ups come ${cfg.followup.afterDays} days after applying, then every ${cfg.followup.everyDays}, at most ${cfg.followup.max}.`);
+      for (const d of due) {
+        const path = await draftFollowup(ctx.llm, ledger, ctx.pool, d.row, d.n, d.days);
+        log(`${d.row.id.slice(0, 8)}  ${d.row.company} | ${d.row.title}: ${d.days} days quiet. Draft ${d.n}: ${path}${emailTarget(d.row) ? `  (send: resumetron followups --send ${d.row.id.slice(0, 8)})` : ""}`);
+      }
+    }),
+  );
+
+program
+  .command("thanks")
+  .argument("<id>")
+  .description("draft a thank-you note after an interview")
+  .requiredOption("--who <name>", "who you met")
+  .requiredOption("--discussed <notes>", "what you talked about, in your words")
+  .action(async (id: string, o) =>
+    withCtx(async (ctx) => {
+      const row = ctx.ledger.get(id);
+      if (!row?.packet_dir) throw new Error(`no application ${id}`);
+      ctx.ledger.setOutcome(row.id, "interview");
+      log(`Draft: ${await draftThanks(ctx.llm, ctx.ledger, ctx.pool, row, o.who, o.discussed)}`);
+    }),
+  );
+
+program
+  .command("stories")
+  .description("draft your STAR interview stories from your pool into stories.yaml (then edit them: they're yours)")
+  .option("--redo", "draft again even if stories.yaml exists")
+  .action(async (o) =>
+    withCtx(async (ctx) => {
+      const existing = loadStories(ctx.ws);
+      if (existing.stories.length && !o.redo) {
+        for (const s of existing.stories) log(`${s.id}: ${s.title}  [${s.themes.join(", ")}]`);
+        return log(`\n${existing.stories.length} stories in ${ctx.ws.stories}. --redo drafts them again.`);
+      }
+      const { stories, removed } = await draftStories(ctx.llm, ctx.pool, ctx.goal);
+      if (existsSync(ctx.ws.stories)) copyFileSync(ctx.ws.stories, `${ctx.ws.stories}.bak`);
+      writeYaml(ctx.ws.stories, { stories });
+      for (const s of stories) log(`${s.id}: ${s.title}  [${s.themes.join(", ")}]`);
+      if (removed.length) log(`\nRemoved ${removed.length} sentence(s) citing things your pool doesn't say.`);
+      log(`\nWrote ${ctx.ws.stories}. Fill in every [ask: ...] with what really happened.`);
+    }),
+  );
+
+program
+  .command("prep")
+  .argument("<id>")
+  .description("an interview prep pack: likely questions, your best story for each, gaps to expect, questions to ask")
+  .option("--stage <stage>", "phone screen | hiring manager | panel | final", "hiring manager")
+  .action(async (id: string, o) =>
+    withCtx(async (ctx) => {
+      const row = ctx.ledger.get(id);
+      if (!row?.packet_dir) throw new Error(`no application ${id}`);
+      const { path, removed } = await prepPack(ctx.llm, ctx.pool, row, ctx.ledger.job(row), loadStories(ctx.ws).stories, o.stage, screenOf(row).gaps ?? []);
+      log(`Wrote ${path}${removed.length ? ` (${removed.length} unverifiable sentence(s) removed)` : ""}`);
+    }),
+  );
+
+program
+  .command("stats")
+  .description("what the numbers say: funnel, interview rates by fit, source and channel, why jobs were turned down, recurring gaps")
+  .option("--days <n>", "look back this many days", "365")
+  .action((o) => {
+    const ledger = new Ledger(ws().ledger);
+    try {
+      const r = buildReport(ledger, Number(o.days));
+      log(`Jobs: ${Object.entries(r.funnel).map(([k, v]) => `${k} ${v}`).join(", ") || "none yet"}`);
+      log(`Sent applications: ${Object.entries(r.outcomes).map(([k, v]) => `${k} ${v}`).join(", ") || "none yet"}`);
+      for (const block of [formatRates("\nBy fit score (does a higher score really mean more interviews?)", r.byFit), formatRates("\nBy source", r.bySource), formatRates("\nBy channel", r.byChannel)]) {
+        for (const l of block) log(l);
+      }
+      if (r.rejections.length) {
+        log("\nWhy jobs were turned down");
+        for (const x of r.rejections) log(`  ${String(x.n).padStart(5)}  ${x.category}`);
+      }
+      if (r.gaps.length) {
+        log("\nGaps screening keeps naming (worth learning, or worth saying in your pool if you already have them)");
+        for (const g of r.gaps) log(`  ${String(g.n).padStart(4)}  ${g.gap}${g.passedScreening ? `  (${g.passedScreening} of those still passed)` : ""}`);
+      }
+      log("\nInterview rates around 3-6% are normal; `resumetron strategy` judges each track against published benchmarks.");
     } finally {
       ledger.close();
     }

@@ -38,6 +38,8 @@ function contactLine(c: Contact): string {
 }
 
 const joinBar = (...xs: (string | undefined)[]) => xs.filter(Boolean).map((x) => h(x!)).join(" | ");
+/** Date ranges with a plain hyphen: some ATS parsers drop ranges joined by an en or em dash. */
+const asciiDates = (s: string) => s.replace(/\s*[–—]\s*/g, " - ");
 
 function section(s: Section): string {
   let body = "";
@@ -48,7 +50,7 @@ function section(s: Section): string {
         html += `<p class="line"><b>${h(e.org)}</b>${e.location ? ` | ${h(e.location)}` : ""}</p>`;
       }
       for (const r of e.roles) {
-        html += `<p class="line"><b>${h(r.title)}</b> | ${joinBar(r.dates, r.meta)}</p>`;
+        html += `<p class="line"><b>${h(r.title)}</b> | ${joinBar(asciiDates(r.dates), r.meta)}</p>`;
         if (s.layout === "role-first") html += `<p class="line">${joinBar(e.org, e.location)}</p>`;
         if (r.bullets.length) html += `<ul>${r.bullets.map((b) => `<li>${h(b.text)}</li>`).join("")}</ul>`;
       }
@@ -59,7 +61,7 @@ function section(s: Section): string {
       const rows = Math.max(e.left.length, e.right.length);
       let grid = "";
       for (let i = 0; i < rows; i++) grid += `<div>${h(e.left[i] ?? "")}</div><div>${h(e.right[i] ?? "")}</div>`;
-      body += `<div class="entry"><p class="line"><b>${h(e.degree)}</b>, ${h(e.date)}</p>
+      body += `<div class="entry"><p class="line"><b>${h(e.degree)}</b>, ${h(asciiDates(e.date))}</p>
         <p class="line">${h([e.school, e.location].filter(Boolean).join(", "))}</p>
         ${rows ? `<div class="edu">${grid}</div>` : ""}</div>`;
     }

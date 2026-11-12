@@ -229,6 +229,7 @@ export function checkBullet(rewrite: string, source: string, context: string): s
 
 const sentencesOf = (text: string) => text.split(/(?<=[.!?])\s+|\n+/).filter((s) => s.trim());
 const FIRST_PERSON = /\b(i|i'm|i've|i'd|my|me|myself)\b/i;
+const ADDRESSES_THEM = /\b(you|your|yours|the (role|position|posting|team|job)|this (role|position|posting|job))\b/i;
 
 /**
  * Checks free prose (cover letters, form answers) against what the writer may cite.
@@ -247,9 +248,12 @@ export function checkProse(text: string, allowed: string, posting = ""): { sente
   const ownCorpus = corpusOf(allowed);
   for (const sentence of sentencesOf(text)) {
     const stems = contentStems(sentence);
+    // A number only the posting has may be repeated back to the employer ("you ask for 5+ years"),
+    // never claimed: a first-person sentence that doesn't address them can't use it.
+    const restating = !FIRST_PERSON.test(sentence) || ADDRESSES_THEM.test(sentence);
     const nums = quantities(sentence).filter((q) => {
       if (own.some((s) => supports(s, q))) return false;
-      return !postSentences.some((p) => p.q.some((s) => supports(s, q)) && [...p.stems].some((w) => w.length >= 4 && stems.has(w)));
+      return !(restating && postSentences.some((p) => p.q.some((s) => supports(s, q)) && [...p.stems].some((w) => w.length >= 4 && stems.has(w))));
     });
     const names = unknownNames(sentence, `${allowed}\n${posting}`);
     const claimed = FIRST_PERSON.test(sentence) ? [...toolsIn(sentence)].filter((t) => !inCorpus(t, ownCorpus) && !names.includes(t)) : [];

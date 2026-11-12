@@ -12,7 +12,8 @@ import { BudgetExceededError, type Llm } from "./llm/index.ts";
 import { goalKeywords, goalTargets, hardFilter, pickStandard, relevance, screenJob } from "./match.ts";
 import { compose, docToText } from "./resume/compose.ts";
 import { type CampaignCtx, applyPlan, discoverBoards, gather, matchesExclusion, planCampaign, sweepNewBoards, syncGoal } from "./campaign.ts";
-import { type AnswerBank, type Goal, type Job, type Pool, type Standard, TailorPlan } from "./schema.ts";
+import { type AnswerBank, type Goal, type Job, type Pool, type ResumeDoc, type Standard, TailorPlan } from "./schema.ts";
+import { checkReadability, keywordCoverage, pdfText } from "./resume/verify.ts";
 import { type SourceSet, liveSources } from "./sources.ts";
 import { type Mailbox, applicationEmail, applyByEmailAddress, hasSendInstructions, syncInbox } from "./email.ts";
 import { allocate, maybeReview, slots, trackStats } from "./strategy.ts";
@@ -322,6 +323,11 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
   if (rendered.fillRatio < 0.75) {
     ctx.log(`  note: the page is only ${Math.round(rendered.fillRatio * 100)}% full; your pool may be thin for this kind of role`);
   }
+  // Read the PDF back the way an ATS does, and see which of the posting's terms made it in.
+  const readability = checkReadability(await pdfText(resumePath).catch(() => ""), pool.contact);
+  if (!readability.ok) ctx.log(`  resume parsing: ${readability.problems.join("; ")}`);
+  const coverage = keywordCoverage(resumeText, docToText(pool), job, ctx.goal.keywords);
+  const provenance = bulletProvenance(rendered.doc, pool, issues.map((i) => i.where));
 
   let coverPath: string | undefined;
   let coverText: string | undefined;
@@ -354,6 +360,10 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
         standard: standard?.name,
         plan,
         guard: { revertedBullets: issues, removedCoverSentences: removed },
+        provenance,
+        readability,
+        keywords: coverage,
+        postingFlags: job.flags,
         cover: coverCheck,
         render: {
           fontPt: rendered.fontPt,
@@ -368,6 +378,27 @@ export async function preparePacket(ctx: Ctx, job: Job, mode: Config["mode"], st
   );
   if (issues.length || removed.length) ctx.log(`  guard: reverted ${issues.length} bullet rewrite(s), removed ${removed.length} cover sentence(s)`);
   return { dir, resumePath, resumeText, coverPath, coverText };
+}
+
+/**
+ * Where each bullet's wording came from: "yours" (your pool's exact text), "reworded" (changed by
+ * the tailor and passed every guard check), or "reverted" (the tailor's change failed a check,
+ * so your wording was used).
+ */
+export function bulletProvenance(doc: ResumeDoc, pool: Pool, reverted: string[]): { id: string; label: "yours" | "reworded" | "reverted"; text: string }[] {
+  const original = new Map<string, string>();
+  for (const s of pool.sections) if (s.type === "experience") for (const e of s.entries) for (const r of e.roles) for (const b of r.bullets) original.set(b.id, b.text);
+  const out: { id: string; label: "yours" | "reworded" | "reverted"; text: string }[] = [];
+  for (const s of doc.sections) {
+    if (s.type !== "experience") continue;
+    for (const e of s.entries)
+      for (const r of e.roles)
+        for (const b of r.bullets) {
+          const label = reverted.includes(b.id) ? "reverted" : b.text === original.get(b.id) ? "yours" : "reworded";
+          out.push({ id: b.id, label, text: b.text });
+        }
+  }
+  return out;
 }
 
 export function packetFor(dir: string, contactName: string): Packet {

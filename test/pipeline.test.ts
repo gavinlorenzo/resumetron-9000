@@ -193,3 +193,18 @@ test("missing standing answers park the application for a human", async () => {
   assert.match(row.reason!, /sponsorship/);
   ledger.close();
 });
+
+test("the rendered resume reads cleanly as text, with ASCII date ranges", async () => {
+  const { compose, identityPlan } = await import("../src/resume/compose.ts");
+  const { checkReadability, pdfText } = await import("../src/resume/verify.ts");
+  const root = mkdtempSync(join(tmpdir(), "rt-pdf-"));
+  dirs.push(root);
+  const pool = examplePool();
+  const out = join(root, "r.pdf");
+  await browser.renderResume(compose(pool, identityPlan(pool)).doc, out, 1);
+  const text = await pdfText(out);
+  const r = checkReadability(text, pool.contact);
+  assert.deepEqual(r.problems, []);
+  assert.doesNotMatch(text, /\d{4}\s?[–—]\s?\d{4}/);
+  assert.match(checkReadability("Jane Doe 2019 – 2021 ".repeat(20), { name: "Jane Doe", links: [] }).problems.join(), /typographic dash/);
+});

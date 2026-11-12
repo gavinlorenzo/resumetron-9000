@@ -32,7 +32,7 @@ export function compose(pool: Pool, plan: TailorPlan): { doc: ResumeDoc; issues:
             const original = role.bullets.find((b) => b.id === pb.id);
             if (!original) continue;
             const context = `${entry.org} ${entry.location ?? ""} ${role.title}`;
-            const problems = pb.text === original.text ? [] : checkBullet(pb.text, original.text, context);
+            const problems = pb.text === original.text ? [] : checkBullet(pb.text, `${original.text} ${original.metric ?? ""}`, context);
             if (problems.length) {
               issues.push({ where: original.id, problem: `${problems.join("; ")}; kept original wording`, text: pb.text });
               bullets.push(original);

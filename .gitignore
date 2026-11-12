@@ -13,3 +13,5 @@ answers.yaml
 applications/
 ledger.db*
 *.pdf
+stories.yaml
+Connections.csv

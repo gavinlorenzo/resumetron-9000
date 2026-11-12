@@ -138,6 +138,14 @@ export const Config = z.object({
       maxPerSync: z.number().default(200),
     })
     .optional(),
+  /** Follow-ups on quiet applications: drafted for you to send (email applications can send in-thread). */
+  followup: z
+    .object({
+      afterDays: z.number().default(7),
+      everyDays: z.number().default(7),
+      max: z.number().default(2),
+    })
+    .prefault({}),
   strategy: z
     .object({
       reviewEveryDays: z.number().default(7),
