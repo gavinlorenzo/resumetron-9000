@@ -15,10 +15,13 @@ An open-source job application agent that works with any model provider. You tel
 A resume agent is only useful if what it sends is true. The Resumetron is built so the model can't invent anything. That's enforced in code, not left to a prompt:
 
 - **The model picks; the pool supplies.** Tailoring returns IDs from your CV pool plus reworded bullet text. Every organization, title, date, and location on the page is copied from your pool.
-- **Every rewording is checked against its source bullet.** A rewrite that adds a number, a name, a tool, or mostly new claims is reverted to your original wording, and the revert is logged in the packet.
-- **Cover letters and written answers are checked against your materials.** A sentence citing a fact found nowhere in your resume, your notes, or the posting is removed.
+- **Every rewording is checked against its source bullet.** A rewrite that adds a number, a name, a tool, a bigger role, or mostly new claims is reverted to your original wording, and the revert is logged in the packet. Numbers are compared by meaning: "$2.3M" can become "$2,300,000" but never "$2.3B", and 40 accounts never becomes "40%". Tools are caught anywhere in a sentence, capitalized or not. "Assisted with" can't become "managed".
+- **Cover letters, written answers, and follow-ups are checked against your materials.** A sentence citing a fact found nowhere in your resume, your notes, or your figures is removed. The posting's own facts can be repeated back to the employer ("you ask for 5+ years") but never claimed as yours: its "5+ years" can't become "I mentored 5 engineers", and a tool only the posting names can't become "I've used Salesforce".
+- **You supply the numbers.** `resumetron strengthen` asks for the real scale or result behind bullets that have none, and never suggests a figure. Your answer becomes a fact the tailor may use.
+- **Every packet shows its work.** Each bullet is labeled as yours, reworded (and checked), or reverted. The packet also lists the posting's key terms the resume covers, the ones your pool has but this resume left out, and the ones nothing you've said supports. Those last ones are never added for you.
 - **Some questions are never answered by the model:** work authorization, sponsorship, salary, demographics, criminal history, relocation, start dates, and anything that asks you to agree, certify, or acknowledge. Neither are multiple-choice questions in general. Those answers come from `answers.yaml`, which only you write, or the application waits for you. Answer once and it's remembered.
-- **Job postings are treated as untrusted text.** The model is told so, gets no tools, and can only return data the software validates.
+- **Some questions are left to you on purpose.** Questions designed to catch AI-written applications ("if you are an AI…", "type the word…") always wait for you.
+- **Job postings are treated as untrusted text.** Before a model reads one, hidden elements (white text, zero-size or off-screen boxes), invisible and smuggled Unicode, and direction overrides are removed. Lines addressed to AI software are marked as part of the posting and shown to you. The model gets no tools and can only return data the software validates.
 
 ## Getting started: just talk to it
 
@@ -58,7 +61,8 @@ Everything personal lives in `~/.resumetron` (or `--home`, or `$RESUMETRON_HOME`
 | File | What it is |
 |---|---|
 | `pool.yaml` | Your CV pool: every role, bullet, honor, course, and skill, each with an ID, plus loose `facts` for cover letters. See [examples/pool.example.yaml](examples/pool.example.yaml). |
-| `goal.yaml` | What to search for: target roles, title filters, keywords, locations, salary floor, dealbreakers, company boards, keyword searches. See [examples/goal.example.yaml](examples/goal.example.yaml). |
+| `goal.yaml` | What to search for: target roles, title filters, keywords, locations, salary floor, dealbreakers, company boards, keyword searches, your eligibility (sponsorship, citizenship, clearance, years, degree, languages), standing lessons, and the opening strategy. See [examples/goal.example.yaml](examples/goal.example.yaml). |
+| `stories.yaml` | Your STAR interview stories, drafted from your pool by `resumetron stories` and edited by you. |
 | `answers.yaml` | Your standing answers to form questions, matched by regex against the question label. |
 | `cover-template.md` | The no-AI cover letter for efficiency mode. `{{company}}`, `{{title}}`, `{{name}}`. |
 | `standards/` | Reusable resumes for efficiency mode. |
@@ -75,6 +79,19 @@ One page by default: centered name and contact line, ruled uppercase section hea
 ## Cover letters
 
 A letter has to be visibly written for one job. The writer first pulls short quotes from the posting: the mission in the company's words, the team, named responsibilities and programs. Each quote is confirmed to really appear in the posting. The letter is then built around them, pairing each requirement with a real accomplishment. A letter that doesn't build on at least two of those details, doesn't name the company in its body, or leans on stock phrases ("passionate", "great fit") gets one revision with that feedback. Your own reasons for wanting to work somewhere (`notes` on a company in `goal.yaml`, which the interview asks for) are fair game. Outside facts about the company are not.
+
+Then a second reader goes over it with fresh eyes, as the hiring manager. It proposes exact edits to generic lines, unsupported claims, and requirements the letter skipped though your resume shows them. The edits are kept only if the letter comes out no less specific and cites nothing more that can't be verified. Turn it off with `coverLetter.review: false`. It costs one extra model call per letter.
+
+**Lessons.** When you correct a packet in a way that applies to every application ("never lead with the café job", "skip roles that are mostly sales"), add it to `lessons:` in `goal.yaml`. Tailoring, cover letters, and screening follow those from then on.
+
+## After you apply
+
+- **Follow-ups.** `resumetron followups` drafts a short, polite follow-up into the packet for each application that's been quiet for a week (then another a week later, at most two). An employer's real reply stops them. Email applications can send it in the same thread with `--send <id>`; everything else you send yourself. Change the cadence under `followup:` in the config.
+- **Who you know.** Export your connections from LinkedIn and run `resumetron connections Connections.csv`. Every job then shows who you know there, and `resumetron connections` lists the companies where you know the most people. It's a local file join; nothing is sent anywhere.
+- **Interview stories.** `resumetron stories` drafts 6-10 STAR stories from your pool into `stories.yaml`. Each cites the bullets it comes from, and any detail it doesn't have is left as `[ask: ...]` for you to fill in.
+- **Interview prep.** `resumetron prep <id> --stage "hiring manager"` writes a prep pack into the packet: likely questions and your best story for each, the gaps a careful interviewer will probe and honest ways to address them, and questions to ask. The `/resumetron` skill can run a mock interview from it.
+- **Thank-you notes.** `resumetron thanks <id> --who "Dana Kim" --discussed "the zoning reform pilot"` drafts one that cites only your application and what you say was discussed.
+- **What the numbers say.** `resumetron stats` shows interview rates by fit score, source, and channel, with 95% intervals and nothing reported under 5 applications. It also breaks down why jobs were turned down and lists the gaps screening keeps naming: worth learning, or worth adding to your pool if you already have them.
 
 ## Modes
 
@@ -103,7 +120,7 @@ resumetron apply <id> --handoff   # opens a visible browser, filled in, for you 
 resumetron skip <id>
 ```
 
-`submit: auto` submits unattended within your quotas (`maxPerDay`, `maxPerRun`, `maxPerCompanyPer30Days`, `minDelaySeconds`, `maxTokensPerRun`). An application counts as `submitted` only when the site shows a recognizable confirmation. Otherwise it's `unconfirmed` and goes to your queue. CAPTCHAs and human-verification challenges are never solved or worked around: the application goes to your queue for a `--handoff`.
+`submit: auto` submits unattended within your quotas (`maxPerDay`, `maxPerRun`, `maxPerCompanyPer30Days`, `minDelaySeconds`, `maxTokensPerRun`). An application counts as `submitted` only when the site shows a recognizable confirmation (text or a confirmation URL, read up to three times as the page settles). Otherwise it's `unconfirmed` and goes to your queue. The page's text and a screenshot are kept as proof (`after-submit.txt`, `after-submit.png`). An unconfirmed application may well have arrived, so `apply` won't send it again without `--force`. CAPTCHAs and human-verification challenges are never solved or worked around: the application goes to your queue for a `--handoff`, which opens a visible browser with everything filled in, on any applicant system, for you to finish.
 
 ## Scheduling
 
@@ -120,7 +137,10 @@ Searching is a campaign with memory, not a fixed list. Every company board and k
 
 - **Fresh, then deeper.** Each search re-checks page 1 for new postings, then continues from the page where the last run stopped. A posting is never shown twice, even when several boards and searches list it. When a search has been read to its end and keeps turning up nothing new, it retires.
 - **A planner steers.** Once per run (one model call), it reads what every search has produced and why screened jobs were turned down. Then it adds searches (adjacent roles, other sectors' vocabulary for the same work), retires ones that keep failing, and names employers worth a look. Retiring a search takes evidence: at least 3 of its jobs screened with none passing, or no new results for two runs. Its reasoning is kept in the journal (`resumetron journal`).
-- **Boards get discovered.** When a match turns up on an aggregator, or the planner names an employer, the tool checks for a Greenhouse, Lever, or Ashby board. If one exists, it reads the whole board, right away when that can upgrade a match to the employer's own fillable form.
+- **Boards get discovered.** When a match turns up on an aggregator, its link often names the employer's own board, which is added directly. Otherwise, and for employers the planner names, the tool looks for a Greenhouse, Lever, Ashby, SmartRecruiters, Workable, or Recruitee board. If one exists, it reads the whole board, right away when that can upgrade a match to the employer's own fillable form. Workday boards can't be guessed; add one from any of its job links with `resumetron boards --add <url>`.
+- **Dead and fake postings are dropped early.** Before a posting is screened, and again before applying, the ATS's API (or the posting page) is checked to confirm it's still open. A timeout or a bot check counts as unknown, never as closed. Postings that ask you to pay for anything, involve depositing checks, or show other known scam patterns are rejected. Each is shown with the sentence that tripped it. Warning signs are flagged for you and for screening: staffing agencies for unnamed clients, no pay range where the law requires one, repeated reposts, personal-email contacts, and hidden text aimed at AI.
+- **Hard requirements are read by code.** Sponsorship, citizenship, clearance, years of experience, degree, and language requirements are found in the posting, skipping negations and EEO boilerplate. A job is rejected only when your `eligibility:` clearly conflicts. If your side is unknown, screening is told to look at it. The quoted sentence is kept as the reason.
+- **Fit is a computed score.** Screening rates five factors (requirements, experience, education, domain, your goals) from explicit evidence only, and names gaps and strengths. The fit score combines them with your weights (`matching.weights`). `resumetron show` prints the breakdown.
 - **Exclusions.** Excluded titles, companies, keywords, or single jobs never come up again: `resumetron exclude title "nurse"`, `resumetron exclude company "Acme"`, `resumetron exclude job <id>`. The planner can add title and company exclusions too, but only for a pattern that at least 3 screened jobs were rejected under and that would block nothing worth applying to. It can never exclude your target roles.
 - **Broad mode.** Set `breadth: broad` in `goal.yaml` (or say so in the interview) for "here's my CV, find me anything I'm half-qualified for". The planner fans out into adjacent roles, postings are ranked rather than dropped for missing keywords, and screening accepts credible stretch roles (`matching.minFitBroad`, default 50).
 
@@ -131,6 +151,7 @@ Sources are official public APIs only:
 | Source | Key needed | Coverage | Applying |
 |---|---|---|---|
 | Greenhouse, Lever, Ashby boards | none | one employer's every opening | filled automatically |
+| Workday, SmartRecruiters, Workable, Recruitee boards | none | one employer's openings (Workday and SmartRecruiters: titles matching your goal, up to 40 per read) | packet prepared; `apply --handoff` fills what it can for you to finish |
 | Himalayas, Remotive | none | remote roles, keyword search | packet prepared; often upgraded via board discovery |
 | USAJOBS | free API key | US federal jobs | packet prepared; you finish on USAJOBS |
 | Adzuna | free app ID and key | broad keyword search across most job sites | packet prepared; often upgraded via board discovery |
@@ -183,7 +204,7 @@ Cleanup runs after every `run`. `resumetron prune` runs it by hand, and `resumet
 
 ## Commands
 
-`init` `import` `interview` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `searches` `search` `exclude` `strategy` `track approve|retire` `review` `outcome` `email test|sync` `journal` `status` `prune` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
+`init` `import` `interview` `strengthen` `render` `preview` `standard build|list` `boards` `run` `queue` `show` `answer` `apply` `skip` `searches` `search` `exclude` `strategy` `track approve|retire` `review` `outcome` `followups` `thanks` `stories` `prep` `connections` `stats` `email test|sync` `journal` `status` `prune` `schedule install|remove` `doctor`. Run `resumetron <command> --help` for options.
 
 ## Use it responsibly
 
@@ -197,6 +218,6 @@ npm run typecheck
 npm run dev -- <command>   # run from source
 ```
 
-Source map: `src/guard.ts` (fabrication checks), `src/resume/` (composition and the template), `src/forms/` (reading, resolving, and filling application forms), `src/pipeline.ts` (a run, end to end), `src/sources.ts` (job boards), `src/llm/` (providers).
+Source map: `src/guard.ts` (fabrication checks), `src/posting.ts` (cleaning untrusted postings), `src/gates.ts` (hard requirements), `src/legitimacy.ts` (scam and ghost-job signals), `src/liveness.ts` (is it still open), `src/match.ts` (filters and factor screening), `src/resume/` (composition, the template, and the PDF readback), `src/forms/` (reading, resolving, and filling application forms), `src/pipeline.ts` (a run, end to end), `src/sources.ts` (job boards), `src/aftercare.ts` (follow-ups, stories, prep), `src/network.ts` (your connections), `src/report.ts` (stats), `src/strategy.ts` (tracks and verdicts), `src/llm/` (providers).
 
 MIT licensed.

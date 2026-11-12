@@ -1,4 +1,4 @@
-# What `resumetron interview` produces. Edit freely.
+# An example goal.yaml. The /resumetron skill (or `resumetron interview`) writes yours; edit freely.
 summary: Recent public policy graduate with municipal internship experience, seeking entry-level policy analyst or program coordinator roles in government or civic nonprofits.
 targetRoles: [Policy Analyst, Program Coordinator, Legislative Aide]
 titleInclude: []
@@ -15,6 +15,18 @@ companies:
 searches:
   - { query: policy analyst, location: Illinois }
 blockedCompanies: []
+# What you've said about your eligibility. Code rejects a posting only when it clearly requires
+# something these say you lack; null means "not said" and never rejects anything.
+eligibility:
+  needsSponsorship: false
+  usCitizen: true
+  clearance: null        # none | eligible | active
+  yearsExperience: 1
+  degree: bachelor       # none | associate | bachelor | master | doctorate
+  languages: []
+# Standing instructions from reviewing packets. Tailoring, letters and screening follow them.
+lessons:
+  - Lead with the municipal internship, not the cafe job.
 notes: "Lead with policy research, where the thesis and internship are strongest; test legislative staff roles alongside it."
 # Optional opening strategy. The first run starts these tracks as written; after that,
 # the weekly review revises them. Leave it out and the first run drafts its own.

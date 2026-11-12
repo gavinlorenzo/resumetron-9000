@@ -712,7 +712,7 @@ program
         const path = await draftFollowup(ctx.llm, ledger, ctx.pool, d.row, d.n, d.days);
         log(`${d.row.id.slice(0, 8)}  ${d.row.company} | ${d.row.title}: ${d.days} days quiet. Draft ${d.n}: ${path}${emailTarget(d.row) ? `  (send: resumetron followups --send ${d.row.id.slice(0, 8)})` : ""}`);
       }
-    }),
+    }, { needGoal: false }),
   );
 
 program
@@ -727,7 +727,7 @@ program
       if (!row?.packet_dir) throw new Error(`no application ${id}`);
       ctx.ledger.setOutcome(row.id, "interview");
       log(`Draft: ${await draftThanks(ctx.llm, ctx.ledger, ctx.pool, row, o.who, o.discussed)}`);
-    }),
+    }, { needGoal: false }),
   );
 
 program
@@ -747,7 +747,7 @@ program
       for (const s of stories) log(`${s.id}: ${s.title}  [${s.themes.join(", ")}]`);
       if (removed.length) log(`\nRemoved ${removed.length} sentence(s) citing things your pool doesn't say.`);
       log(`\nWrote ${ctx.ws.stories}. Fill in every [ask: ...] with what really happened.`);
-    }),
+    }, { needGoal: false }),
   );
 
 program
@@ -761,7 +761,7 @@ program
       if (!row?.packet_dir) throw new Error(`no application ${id}`);
       const { path, removed } = await prepPack(ctx.llm, ctx.pool, row, ctx.ledger.job(row), loadStories(ctx.ws).stories, o.stage, screenOf(row).gaps ?? []);
       log(`Wrote ${path}${removed.length ? ` (${removed.length} unverifiable sentence(s) removed)` : ""}`);
-    }),
+    }, { needGoal: false }),
   );
 
 program

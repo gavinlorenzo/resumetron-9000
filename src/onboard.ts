@@ -27,13 +27,14 @@ Have a natural conversation, one or two questions at a time, building on what th
 - Target employers: companies or organizations they admire, and what specifically draws them to each one (their reasons go into cover letters, so a sentence or two in their own words is worth getting). Many companies list jobs on Greenhouse, Lever, or Ashby boards (e.g. boards.greenhouse.io/<token>, jobs.lever.co/<token>, jobs.ashbyhq.com/<token>); suggest likely board tokens for companies they name, and the tool will verify them.
 - Keyword searches for broad sources (for example federal jobs on USAJOBS).
 - Standing answers for application forms they want answered automatically: work authorization, sponsorship, how they heard about roles, demographic questions (many people choose "Decline to self-identify"). Only record what they actually tell you.
+- Eligibility, which the software uses to skip postings they clearly can't get: whether they need visa sponsorship, are a US citizen, hold or could obtain a security clearance (none, eligible, active), years of professional experience, highest degree, and languages besides English they work in. Leave anything they don't say as null.
 
 Their CV pool is below, so you can ask informed questions instead of generic ones. When you have enough (usually 5-8 exchanges), summarize the plan in "say", set done to true, and fill in "goal" and "answers". In goal: targetRoles are role names; titleInclude/titleExclude are short title words or phrases used as filters (titleInclude may stay empty to rely on scoring); keywords are terms a good posting would mention (8-20); summary is three or four sentences in the third person about who they are and what they want, which later guides tailoring. For answers, "match" is a short case-insensitive regex for the question label.`;
 
 const GOAL_SHAPE = `{"say": "<your message to them>", "done": false}
 or, when finished:
 {"say": "<summary>", "done": true,
- "goal": {"summary": "", "breadth": "focused|broad", "targetRoles": [], "titleInclude": [], "titleExclude": [], "keywords": [], "locations": [], "remoteOk": true, "remoteOnly": false, "minSalary": null, "dealbreakers": [], "companies": [{"ats": "greenhouse|lever|ashby", "token": "", "name": "", "notes": "<their reasons, in their words>"}], "searches": [{"query": "", "location": ""}], "blockedCompanies": [], "notes": ""},
+ "goal": {"summary": "", "breadth": "focused|broad", "targetRoles": [], "titleInclude": [], "titleExclude": [], "keywords": [], "locations": [], "remoteOk": true, "remoteOnly": false, "minSalary": null, "dealbreakers": [], "companies": [{"ats": "greenhouse|lever|ashby", "token": "", "name": "", "notes": "<their reasons, in their words>"}], "searches": [{"query": "", "location": ""}], "blockedCompanies": [], "notes": "", "eligibility": {"needsSponsorship": null, "usCitizen": null, "clearance": null, "yearsExperience": null, "degree": null, "languages": []}},
  "answers": [{"match": "authorized to work", "answer": "Yes"}]}`;
 
 export async function interview(
