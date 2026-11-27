@@ -143,6 +143,10 @@ resumetron schedule install --print         # show the entry without installing
 resumetron schedule remove
 ```
 
+## Dashboard
+
+`resumetron dashboard` serves a web view of the campaign at `http://127.0.0.1:4590`. It shows what was submitted and what is waiting on a person, each application's fit, gaps, warnings and posting, the resume and cover letter PDFs, the jobs that were screened out and why, the tracks, and what each run did. It is read-only: it never changes the ledger or starts a run. Every request needs the password in `RESUMETRON_DASHBOARD_PASSWORD` (8+ characters, any user name), because the page holds personal data. To let someone follow along from another device, keep it bound to `127.0.0.1` and put a tunnel in front of it (for example `ngrok http 4590`).
+
 ## Where jobs come from: the search campaign
 
 Searching is a campaign with memory, not a fixed list. Every company board and keyword search is tracked with a page cursor and yield statistics, so each run digs deeper instead of re-reading the same results:

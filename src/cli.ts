@@ -832,6 +832,21 @@ sched.command("remove").action(() => {
 });
 
 program
+  .command("dashboard")
+  .description("a password-protected, read-only web view of the campaign: applications, documents, screening and activity")
+  .option("--port <port>", "port to listen on", "4590")
+  .option("--host <host>", "address to bind (keep 127.0.0.1 and put a tunnel in front to share it)", "127.0.0.1")
+  .option("--password-env <name>", "environment variable holding the password", "RESUMETRON_DASHBOARD_PASSWORD")
+  .action(async (o) => {
+    const w = ws();
+    const password = process.env[o.passwordEnv];
+    if (!password || password.length < 8) throw new Error(`set ${o.passwordEnv} to a password of 8+ characters; the dashboard shows personal data`);
+    const { startDashboard } = await import("./dashboard.ts");
+    const url = await startDashboard({ ws: w, cfg: loadConfig(w), password, port: Number(o.port), host: o.host });
+    log(`Dashboard for ${w.root} at ${url} (any user name, the password from ${o.passwordEnv}). Ctrl+C stops it.`);
+  });
+
+program
   .command("doctor")
   .description("check the workspace, provider credentials, and browser")
   .action(async () => {
