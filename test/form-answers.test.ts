@@ -21,3 +21,10 @@ test("questions about other employers or past applications are left alone", () =
   assert.equal(workedHereAnswer("Have you previously applied to Acme?", "Acme", pool), undefined);
   assert.equal(workedHereAnswer("Why do you want to work here?", "Acme", pool), undefined);
 });
+
+test("a gender answer matches the form's other common wording", async () => {
+  const { matchOption } = await import("../src/forms/resolve.ts");
+  assert.equal(matchOption("Female", ["Woman", "Man", "Non-Binary", "I don't wish to answer"]), "Woman");
+  assert.equal(matchOption("Female", ["Female", "Male"]), "Female");
+  assert.equal(matchOption("Male", ["Woman", "Man"]), "Man");
+});

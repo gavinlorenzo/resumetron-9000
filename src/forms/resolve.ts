@@ -164,8 +164,11 @@ export const fullState = (s?: string) => (s ? (STATES[s.trim().toUpperCase()] ??
  * Also tries the answer without a leading "The" and with a state code spelled out
  * ("Springfield, IL" -> "Springfield, Illinois"), since option lists name things in full.
  */
+/** Same answer, other common wording on forms: "Female" is offered as "Woman" on many. */
+const SAME_ANSWER: Record<string, string> = { female: "Woman", woman: "Female", male: "Man", man: "Male" };
+
 export function matchOption(answer: string, options: string[]): string | undefined {
-  const variants = [answer, answer.replace(/^the\s+/i, ""), answer.replace(/,\s*([A-Za-z]{2})\b/, (m, code: string) => (STATES[code.toUpperCase()] ? `, ${STATES[code.toUpperCase()]}` : m))];
+  const variants = [answer, SAME_ANSWER[normalize(answer)] ?? answer, answer.replace(/^the\s+/i, ""), answer.replace(/,\s*([A-Za-z]{2})\b/, (m, code: string) => (STATES[code.toUpperCase()] ? `, ${STATES[code.toUpperCase()]}` : m))];
   for (const v of [...new Set(variants)]) {
     const hit = matchOne(v, options);
     if (hit) return hit;
