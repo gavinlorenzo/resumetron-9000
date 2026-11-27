@@ -62,7 +62,7 @@ async function withCtx<T>(fn: (ctx: Ctx) => Promise<T>, opts: { needGoal?: boole
     };
     if (cfg.email) {
       try {
-        ctx.mailbox = liveMailbox(cfg.email);
+        ctx.mailbox = liveMailbox(cfg.email, w.root);
       } catch (e) {
         log(`email disabled: ${errorMessage(e)}`);
       }
@@ -463,10 +463,26 @@ mail
   .command("test")
   .description("check the IMAP and SMTP login without sending anything")
   .action(async () => {
-    const cfg = loadConfig(ws());
+    const w = ws();
+    const cfg = loadConfig(w);
     if (!cfg.email) throw new Error("no email section in config.yaml");
-    await liveMailbox(cfg.email).verify();
+    await liveMailbox(cfg.email, w.root).verify();
     log("IMAP and SMTP login both work.");
+  });
+mail
+  .command("authorize")
+  .description("one-time Google sign-in for email.oauth: open the printed link, approve, and the token is saved in the workspace")
+  .action(async () => {
+    const w = ws();
+    const cfg = loadConfig(w);
+    if (!cfg.email?.oauth) throw new Error("add email.oauth.clientFile to config.yaml first (a Desktop OAuth client JSON from Google Cloud)");
+    const { authorize, resolveIn } = await import("./oauth.ts");
+    const file = await authorize(
+      { clientFile: resolveIn(w.root, cfg.email.oauth.clientFile), tokenFile: resolveIn(w.root, cfg.email.oauth.tokenFile) },
+      { loginHint: cfg.email.address, show: (url) => log(`Open this link, sign in as ${cfg.email!.address} and approve:
+${url}`) },
+    );
+    log(`Authorized. Token saved to ${file}. Check it with: resumetron email test`);
   });
 mail
   .command("sync")
@@ -477,7 +493,7 @@ mail
     if (!cfg.email) throw new Error("no email section in config.yaml");
     const ledger = new Ledger(w.ledger);
     try {
-      const r = await syncInbox(liveMailbox(cfg.email), ledger, { llm: llmFor(w, ledger), limit: cfg.email.maxPerSync, log });
+      const r = await syncInbox(liveMailbox(cfg.email, w.root), ledger, { llm: llmFor(w, ledger), limit: cfg.email.maxPerSync, log });
       log(`Read ${r.read} new message(s); ${r.matched} about your applications.${r.outcomes.length ? `\n${r.outcomes.join("\n")}` : ""}`);
       for (const e of ledger.recentEmails(10)) log(`  ${e.at.slice(0, 10)} ${e.kind.padEnd(12)} ${e.from_domain.padEnd(24)} ${e.subject.slice(0, 60)}`);
     } finally {

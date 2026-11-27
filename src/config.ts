@@ -131,6 +131,8 @@ export const Config = z.object({
       address: z.string(),
       user: z.string().optional(), // defaults to address
       passwordEnv: z.string().default("RESUMETRON_EMAIL_PASSWORD"),
+      /** Google sign-in instead of an app password: a Desktop OAuth client file, and where the token is kept (paths relative to the workspace). */
+      oauth: z.object({ clientFile: z.string(), tokenFile: z.string().default("oauth-token.json") }).optional(),
       imap: z.object({ host: z.string(), port: z.number().default(993), secure: z.boolean().default(true) }).optional(),
       smtp: z.object({ host: z.string(), port: z.number().default(465), secure: z.boolean().default(true) }).optional(),
       fromName: z.string().optional(),

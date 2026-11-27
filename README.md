@@ -199,6 +199,15 @@ An unanswered application counts as a "no" only in proportion to how long it has
 
 Add an `email:` section to the config with an app password in an environment variable. A Gmail app password requires 2-Step Verification: Google Account → Security → App passwords. Then check the login with `resumetron email test`, which sends nothing.
 
+Some Google accounts (new ones especially) can't make app passwords. For those, use Google sign-in instead:
+1. In a Google Cloud project of your own, enable the Gmail API.
+2. Configure the OAuth consent screen and publish it, so the token doesn't expire after 7 days.
+3. Create a "Desktop app" OAuth client and save its JSON in your workspace.
+4. Add `oauth: { clientFile: client.json }` under `email:` in the config.
+5. Run `resumetron email authorize`. It prints a link: sign in as that address and approve, and the token is saved in the workspace. Google will warn that the app is unverified; it is your own project.
+
+See [PRIVACY.md](PRIVACY.md) for what the tool reads and sends.
+
 - **Outcomes from replies.** Each run reads new mail. It matches replies to applications by thread for emails it sent, otherwise by company name in a hiring context. It downloads message bodies only when the sender or subject points to one of your applications. Each reply is classified as acknowledged, rejected, interview, or offer, using wording rules first and a short model call when the wording is ambiguous. Only a one-line record of each matched message is kept (date, sender domain, subject, outcome), never the body, and unrelated mail leaves no trace. `resumetron email sync` reads replies now.
 - **Applying by email.** When a posting says to email an application to an address that appears in the posting itself, the tool sends the cover letter as the body, with the resume and cover letter PDFs attached. In review mode it drafts `email.txt` in the packet. Postings with their own subject-line or reference-number rules go to your queue.
 - **Manual outcomes.** For replies that came another way (a phone call, LinkedIn): `resumetron outcome <id> interview`.

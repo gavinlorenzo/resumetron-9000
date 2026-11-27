@@ -6,6 +6,7 @@ import { type Llm, completeJson } from "./llm/index.ts";
 import { z } from "zod";
 import type { Job } from "./schema.ts";
 import { normalize } from "./util.ts";
+import { accessTokens, resolveIn } from "./oauth.ts";
 
 // Email is how outcomes come back, and for some postings how applications go out.
 // Only messages that match an application are kept, as one short record each
@@ -47,18 +48,28 @@ const PRESETS = {
   outlook: { imap: { host: "outlook.office365.com", port: 993, secure: true }, smtp: { host: "smtp.office365.com", port: 587, secure: false } },
 };
 
-export function liveMailbox(cfg: NonNullable<Config["email"]>): Mailbox {
+/** `root` is the workspace, which relative OAuth file paths are resolved against. */
+export function liveMailbox(cfg: NonNullable<Config["email"]>, root = "."): Mailbox {
   const preset = cfg.provider === "custom" ? undefined : PRESETS[cfg.provider];
   const imap = cfg.imap ?? preset?.imap;
   const smtp = cfg.smtp ?? preset?.smtp;
   if (!imap || !smtp) throw new Error("email: set imap and smtp hosts, or provider: gmail | outlook");
-  const pass = process.env[cfg.passwordEnv];
-  if (!pass) throw new Error(`email: environment variable ${cfg.passwordEnv} is not set (use an app password)`);
-  const auth = { user: cfg.user ?? cfg.address, pass };
+  const user = cfg.user ?? cfg.address;
+  let imapAuth: () => Promise<any>;
+  let smtpAuth: () => Promise<any>;
+  if (cfg.oauth) {
+    const token = accessTokens({ clientFile: resolveIn(root, cfg.oauth.clientFile), tokenFile: resolveIn(root, cfg.oauth.tokenFile) });
+    imapAuth = async () => ({ user, accessToken: await token() });
+    smtpAuth = async () => ({ type: "OAuth2", user, accessToken: await token() });
+  } else {
+    const pass = process.env[cfg.passwordEnv];
+    if (!pass) throw new Error(`email: environment variable ${cfg.passwordEnv} is not set (use an app password, or oauth:)`);
+    imapAuth = smtpAuth = async () => ({ user, pass });
+  }
 
   const withImap = async <T>(fn: (client: any) => Promise<T>): Promise<T> => {
     const { ImapFlow } = await import("imapflow");
-    const client = new ImapFlow({ ...imap, auth, logger: false });
+    const client = new ImapFlow({ ...imap, auth: await imapAuth(), logger: false });
     await client.connect();
     try {
       return await fn(client);
@@ -111,7 +122,7 @@ export function liveMailbox(cfg: NonNullable<Config["email"]>): Mailbox {
       }),
     async send(m) {
       const nodemailer = await import("nodemailer");
-      const transport = nodemailer.createTransport({ ...smtp, auth });
+      const transport = nodemailer.createTransport({ ...smtp, auth: (await smtpAuth()) as any });
       const info = await transport.sendMail({
         from: cfg.fromName ? `"${cfg.fromName}" <${cfg.address}>` : cfg.address,
         to: m.to,
@@ -124,7 +135,7 @@ export function liveMailbox(cfg: NonNullable<Config["email"]>): Mailbox {
     async verify() {
       await withImap(async (client) => client.status("INBOX", { messages: true }));
       const nodemailer = await import("nodemailer");
-      await nodemailer.createTransport({ ...smtp, auth }).verify();
+      await nodemailer.createTransport({ ...smtp, auth: (await smtpAuth()) as any }).verify();
     },
   };
 }
