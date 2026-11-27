@@ -656,6 +656,39 @@ program
   });
 
 program
+  .command("repack")
+  .argument("[ids...]", "jobs to rebuild (default: every application waiting on you)")
+  .description("rebuild the resume and cover letter for waiting applications after the pool, goal or answers change, and re-check the form (never submits)")
+  .action(async (ids: string[]) =>
+    withCtx(async (ctx) => {
+      const rows = ids.length
+        ? ids.map((id) => {
+            const row = ctx.ledger.get(id);
+            if (!row) throw new Error(`no job ${id}`);
+            return row;
+          })
+        : ctx.ledger.byStatus("ready", "needs_human");
+      if (!rows.length) return log("Nothing waiting to rebuild.");
+      for (const row of rows) {
+        if (!["ready", "needs_human", "failed", "skipped"].includes(row.status)) {
+          log(`${row.id.slice(0, 8)} is ${row.status}; only unsent applications are rebuilt`);
+          continue;
+        }
+        log(`\n> ${row.company} | ${row.title}`);
+        const job = ctx.ledger.job(row);
+        try {
+          const packet = await preparePacket(ctx, job, ctx.cfg.mode);
+          const result = await processForm(ctx, job, packet, { submit: false, mode: ctx.cfg.mode });
+          ctx.ledger.setStatus(job.id, result.status, { reason: result.detail, packet_dir: packet.dir });
+          log(`  ${result.status}: ${result.detail}`);
+        } catch (e) {
+          log(`  failed to rebuild: ${errorMessage(e)}`);
+        }
+      }
+    }),
+  );
+
+program
   .command("skip")
   .argument("<id>")
   .description("pass on an application")

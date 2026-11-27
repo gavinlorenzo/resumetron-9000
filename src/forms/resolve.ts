@@ -28,6 +28,33 @@ export interface ResolveInputs {
   resumeText: string;
 }
 
+const WORKED_HERE =
+  /\b(previously|ever|formerly|in the past|currently)\b.{0,60}\b(work|worked|working|employed|employee)\b|\bformer (employee|worker|contractor)\b|\b(work|worked|employed)\b.{0,60}\b(before|previously|in the past)\b/i;
+const THIS_EMPLOYER = /\b(us|our|this (company|organization|organisation|employer|firm))\b/i;
+const ORG_SUFFIX = /\b(inc|llc|ltd|co|corp|corporation|company|group|holdings|plc|the)\b/g;
+const orgKey = (s: string) => normalize(s).replace(ORG_SUFFIX, " ").replace(/\s+/g, " ").trim();
+const sameOrg = (a: string, b: string) => Boolean(a && b) && (a === b || ` ${a} `.includes(` ${b} `) || ` ${b} `.includes(` ${a} `));
+
+/**
+ * "Have you worked for us before?" answered from the pool's work history, by code: "Yes" only
+ * when an employer in the pool is the one hiring ("currently" also needs a role that runs to the
+ * present). Questions about other employers, or about having applied before, are left alone.
+ */
+export function workedHereAnswer(label: string, company: string | undefined, pool: Pool): "Yes" | "No" | undefined {
+  if (!company || !label) return undefined;
+  if (!WORKED_HERE.test(label)) return undefined;
+  const key = orgKey(company);
+  if (!key) return undefined;
+  if (!` ${orgKey(label)} `.includes(` ${key} `) && !THIS_EMPLOYER.test(label)) return undefined;
+  const here = pool.sections
+    .flatMap((s) => (s.type === "experience" ? s.entries : []))
+    .filter((e) => sameOrg(orgKey(e.org), key));
+  if (/\bcurrently\b/i.test(label) && !/\b(previously|ever|before|in the past|formerly)\b/i.test(label)) {
+    return here.some((e) => e.roles.some((r) => /present|current|now/i.test(r.dates))) ? "Yes" : "No";
+  }
+  return here.length ? "Yes" : "No";
+}
+
 /**
  * Questions only the applicant can answer truthfully. These come from the answer bank
  * or from the applicant directly; a model never guesses them.
@@ -227,6 +254,11 @@ export async function resolveFields(fields: FormField[], inp: ResolveInputs): Pr
     const bank = inp.bank.answers.find((a) => new RegExp(a.match, "i").test(label));
     if (bank) {
       out.push(settle(f, bank.answer, "bank"));
+      continue;
+    }
+    const worked = workedHereAnswer(label, inp.job.company, inp.pool);
+    if (worked) {
+      out.push(settle(f, worked, "identity"));
       continue;
     }
     if (/cover letter/i.test(label) && f.kind === "textarea") {
