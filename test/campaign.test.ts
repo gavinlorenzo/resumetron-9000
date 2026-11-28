@@ -130,6 +130,19 @@ test("planner additions are deduped and capped; board discovery is cached", asyn
   assert.deepEqual(await discoverBoards(ctx, ["Org 7"]), [], "and not looked up again");
 });
 
+test("new searches wait while the screening backlog is full", () => {
+  const { ledger, ctx } = setup();
+  const plan = { addQueries: [{ query: "program coordinator", why: "" }], retire: [], addExclusions: [], addCompanies: [], note: "" };
+  ledger.addJobs(Array.from({ length: ctx.cfg.matching.maxScreenPerRun * 3 }, (_, i) => mk(i + 1)), "q:1");
+  const held = applyPlan(ctx, plan);
+  assert.ok(held[0].startsWith("held 1 new search"));
+  assert.equal(ledger.queries("active").length, 0);
+
+  for (const row of ledger.byStatus("discovered").slice(0, 5)) ledger.setStatus(row.id, "rejected", { reason: "screened: not a fit" });
+  applyPlan(ctx, plan);
+  assert.ok(ledger.queries("active").some((q) => q.query === "program coordinator"));
+});
+
 test("retention keeps the workspace bounded", () => {
   const { root, ledger } = setup();
   const ws = workspaceAt(root);

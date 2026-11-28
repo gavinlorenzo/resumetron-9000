@@ -106,10 +106,21 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
   // 2. Free filters on everything not yet judged. Broad campaigns rank instead of rejecting on keywords.
   const broad = goal.breadth === "broad";
   const exclusions = ledger.exclusions();
-  const targets = broad ? [...goalTargets(goal), ...ledger.queries("active").map((q) => q.query)] : goalTargets(goal);
+  // A broad campaign also scores a title against the search that found it. Scoring against every
+  // search at once let any shared word reach the top score, so the screening order meant nothing.
+  const queryText = new Map(ledger.queries().map((q) => [`q:${q.id}`, q.query]));
+  const targetsFor = (origin: string | null) => {
+    const own = broad && origin ? queryText.get(origin) : undefined;
+    return own ? [...goalTargets(goal), own] : goalTargets(goal);
+  };
   const keywords = broad ? [...new Set([...goalKeywords(goal), ...poolTags(ctx.pool)])] : goalKeywords(goal);
   const hits = new Map<number, number>();
   ledger.batch(() => {
+  // Rescore what is still waiting for screening, so the order follows the current scoring.
+  for (const row of ledger.byStatus("matched")) {
+    if (row.reason !== "keyword match") continue;
+    ledger.setStatus(row.id, "matched", { fit: Math.round(relevance(ledger.job(row), targetsFor(row.origin), keywords) * 100) });
+  }
   for (const row of ledger.byStatus("discovered")) {
     const job = ledger.job(row);
     const ex = exclusions.find((e) => matchesExclusion(e, job));
@@ -125,7 +136,7 @@ export async function run(ctx: Ctx, opts: RunOptions = {}): Promise<Record<strin
         ledger.setScreen(row.id, { gates: gates.unknown.map((h) => `${h.detail}: "${h.quote}"`), warnings: [...signals.warn, ...(job.flags ?? [])] });
       }
     }
-    const score = relevance(job, targets, keywords);
+    const score = relevance(job, targetsFor(row.origin), keywords);
     if (why) ledger.setStatus(row.id, "rejected", { reason: why });
     else if (!broad && score < cfg.matching.minKeywordScore) ledger.setStatus(row.id, "rejected", { reason: `low keyword match (${score.toFixed(2)})` });
     else {

@@ -114,7 +114,10 @@ export function checkGates(job: Pick<Job, "title" | "description">, el: Eligibil
     break;
   }
 
-  const lang = find(cls, LANG_REQ, { neg: true });
+  // A language in the title is the job ("Dutch Speaking Content Moderator"), so the title counts as the requirement.
+  const titleLang = new RegExp(String.raw`\b(${LANGUAGES.join("|")})\b[^,|/]{0,12}\b(speak(ing|er)?|bilingual)\b|\bbilingual\b|\b(${LANGUAGES.join("|")})\s+(content|customer|support|moderator|translator|interpreter|reviewer|agent|representative)\b`, "i").test(job.title);
+  const titleNamesOne = titleLang && LANGUAGES.some((l) => new RegExp(`\\b${l}\\b`, "i").test(job.title));
+  const lang = (titleNamesOne ? job.title : null) ?? find(cls, LANG_REQ, { neg: true });
   if (lang) {
     const named = LANGUAGES.filter((l) => new RegExp(`\\b${l}\\b`, "i").test(lang));
     const known = el.languages.map((l) => l.toLowerCase());

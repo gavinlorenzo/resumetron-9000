@@ -361,6 +361,11 @@ export class Ledger {
     return rows.filter((r) => companyKey(r.company) === companyKey(company)).length;
   }
 
+  /** Jobs that passed the free filters and are still waiting for a model to screen them. */
+  unscreened(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE status IN ('discovered','matched') AND COALESCE(reason, '') NOT LIKE 'screened%'").get() as any).n;
+  }
+
   counts(): Record<string, number> {
     const rows = this.db.prepare("SELECT status, COUNT(*) AS n FROM jobs GROUP BY status").all() as any[];
     return Object.fromEntries(rows.map((r) => [r.status, r.n]));

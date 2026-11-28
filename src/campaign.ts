@@ -179,7 +179,7 @@ export type Plan = z.infer<typeof Plan>;
 const PLANNER_SYSTEM = `You run the search side of one person's job hunt. Each run you see their background and goal, what every search so far has produced, and why screened jobs were turned down. You decide how to search next. The software executes searches, reads results page by page, never shows the same posting twice, and retires searches that stop producing anything new. Your job is to keep it pointed at productive, unexplored ground.
 
 - Queries are what a person would type into a job board: 1-4 words, usually a role title or a skill plus a role. Spread them across the role titles the goal names, adjacent roles their background genuinely supports, and the different vocabulary sectors use for the same work (government, nonprofit, corporate, startup).
-- Lean into what is working: searches whose results pass screening deserve variations. Retire an active search (by id) only once its results have been screened and keep failing; the software declines a retirement until at least three of a search's jobs have been screened with none passing, or the search has gone dry. Results wait in a backlog and are screened a few per run, so a new search with zero passes usually just hasn't been judged yet.
+- Lean into what is working: searches whose results pass screening deserve variations. Retire an active search (by id) only once its results have been screened and keep failing; the software declines a retirement until at least three of a search's jobs have been screened with none passing, or the search has gone dry. Results wait in a backlog and are screened a few per run, so a new search with zero passes usually just hasn't been judged yet. "searchTotals" counts every active search, including ones not listed; "screeningBacklog" says how many postings are waiting. While the backlog is at or above its hold mark the software adds no new searches, so spend those runs on retirements, companies and exclusions instead.
 - Companies: name specific employers likely to hire someone with this background. The software checks whether each has a public job board and, if so, reads all of its openings.
 - Exclusions remove jobs before anyone spends effort on them. Propose a title or company exclusion only for a pattern you see rejected again and again in the evidence. The software accepts one only when at least three screened jobs were rejected under it and none worth applying to would be blocked.
 - A weekly strategist sets the campaign's hypotheses ("strategy tracks"). Your searches should serve those tracks: fill gaps in their coverage rather than opening unrelated directions.
@@ -191,9 +191,22 @@ export async function planCampaign(ctx: CampaignCtx): Promise<Plan> {
   const { ledger, goal, cfg } = ctx;
   const sources = searchSources(cfg, goal.remoteOk);
   const qs = ledger.queries();
+  const active = qs.filter((q) => q.status === "active");
+  const backlog = ledger.unscreened();
   const stats = {
     searchSources: sources.length ? sources : "none configured: propose companies instead of queries",
-    activeSearches: qs.filter((q) => q.status === "active").slice(-60).map((q) => ({ id: q.id, source: q.source, query: q.query, location: q.location, runs: q.runs, newJobs: q.fresh, screened: q.screened, passedScreening: q.matched })),
+    // The searches with evidence come first, so a long list never hides what has been judged.
+    activeSearches: [...active]
+      .sort((a, b) => b.screened - a.screened || b.runs - a.runs || b.id - a.id)
+      .slice(0, 60)
+      .map((q) => ({ id: q.id, source: q.source, query: q.query, location: q.location, runs: q.runs, newJobs: q.fresh, screened: q.screened, passedScreening: q.matched })),
+    searchTotals: {
+      active: active.length,
+      neverRun: active.filter((q) => q.runs === 0).length,
+      ranButNoneScreenedYet: active.filter((q) => q.runs > 0 && q.screened === 0).length,
+      withScreenedResults: active.filter((q) => q.screened > 0).length,
+    },
+    screeningBacklog: { waiting: backlog, screenedPerRun: cfg.matching.maxScreenPerRun, newSearchesHeldAt: backlogHold(cfg) },
     coveredSearches: qs.filter((q) => q.status !== "active").slice(-40).map((q) => `${q.query} (${q.source}, ${q.status}, ${q.fresh} new, ${q.matched} passed)`),
     boards: ledger.boards().slice(-60).map((b) => `${b.company} (${b.status}, ${b.seen} open, ${b.matched} passed)`),
     strategyTracks: ledger.tracks("proposed", "active", "cemented").map((t) => `${t.name}: ${t.hypothesis}`),
@@ -216,13 +229,20 @@ export async function planCampaign(ctx: CampaignCtx): Promise<Plan> {
   );
 }
 
+/** Unscreened postings at which the planner stops adding searches: about three runs of screening. */
+export const backlogHold = (cfg: Config) => cfg.matching.maxScreenPerRun * 3;
+
 /** Applies a plan within limits. Returns what changed, for the journal. */
 export function applyPlan(ctx: CampaignCtx, plan: Plan): string[] {
   const { ledger, goal, cfg } = ctx;
   const done: string[] = [];
   const sources = searchSources(cfg, goal.remoteOk);
   let added = 0;
-  for (const q of plan.addQueries) {
+  // New searches only add to a backlog nobody can screen yet; hold them until screening catches up.
+  const waiting = ledger.unscreened();
+  const hold = plan.addQueries.length > 0 && waiting >= backlogHold(cfg);
+  if (hold) done.push(`held ${plan.addQueries.length} new search(es): ${waiting} postings are still waiting to be screened`);
+  for (const q of hold ? [] : plan.addQueries) {
     if (added >= cfg.campaign.maxNewQueriesPerRun || !q.query.trim()) break;
     let any = false;
     for (const s of sources) any = ledger.addQuery(s, q.query, q.location ?? "", "agent", q.why) || any;

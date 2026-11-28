@@ -61,6 +61,12 @@ test("clearance, years, degree and language gates", () => {
   assert.equal(checkGates(spanish, el({ languages: ["French"] })).reject?.gate, "language");
   assert.equal(checkGates(spanish, el({ languages: ["Spanish"] })).reject, null);
   assert.equal(checkGates(spanish, el()).reject, null);
+
+  // A language in the title is the job itself.
+  const dutch = { title: "Dutch Speaking Content Moderator for Social Media", description: "Review posts from home." };
+  assert.equal(checkGates(dutch, el({ languages: ["French"] })).reject?.quote, dutch.title);
+  const french = { title: "Bilingual (French/English) Tier 1 Support Representative", description: "Fluency in German is a plus." };
+  assert.equal(checkGates(french, el({ languages: ["French"] })).reject, null);
 });
 
 const job = (description: string, extra: Partial<Job> = {}): Job => ({
